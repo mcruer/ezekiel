@@ -4,10 +4,10 @@
 \alias{ezql_get}
 \title{Fetch Data from SQL Table}
 \usage{
-ezql_get(sql_table_name, schema = NULL, database = NULL, address = NULL)
+ezql_get(table, schema = NULL, database = NULL, address = NULL)
 }
 \arguments{
-\item{sql_table_name}{The name of the SQL table.}
+\item{table}{The name of the SQL table.}
 
 \item{schema}{The schema name (default: NULL, will use ezql_details_schema()).}
 

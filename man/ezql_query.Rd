@@ -4,20 +4,18 @@
 \alias{ezql_query}
 \title{Execute SQL Queries on a Server}
 \usage{
-ezql_query(queries, schema = NULL, database = NULL, address = NULL)
+ezql_query(queries, database = NULL, address = NULL)
 }
 \arguments{
 \item{queries}{A character vector of SQL queries to execute.}
-
-\item{schema}{A string specifying the schema. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.}
 
 \item{database}{A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.}
 
 \item{address}{A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.}
 }
 \value{
-Logical `TRUE` if all queries are executed successfully; otherwise, an error is thrown.
+A list containing the results of each query, or error messages if any query fails.
 }
 \description{
-This function executes one or more SQL queries on a specified SQL server.
+This function executes one or more SQL queries on a specified SQL server and returns the results or error messages.
 }

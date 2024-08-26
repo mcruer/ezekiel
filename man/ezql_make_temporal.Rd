@@ -5,14 +5,17 @@
 \title{Make a Table Temporal in SQL Server}
 \usage{
 ezql_make_temporal(
-  sql_table_name,
+  table,
+  primary_key_column,
   schema = NULL,
   database = NULL,
   address = NULL
 )
 }
 \arguments{
-\item{sql_table_name}{A string specifying the name of the SQL table to convert to temporal.}
+\item{table}{A string specifying the name of the SQL table to convert to temporal.}
+
+\item{primary_key_column}{A string specifying the name of the column to set as the primary key. Defaults to "ID".}
 
 \item{schema}{A string specifying the schema. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.}
 
