@@ -8,6 +8,8 @@ ezql_new(
   df,
   table,
   rosetta,
+  rosetta_names_col = "sql_name",
+  rosetta_sql_types_col = "sql_type",
   primary_key = NULL,
   schema = NULL,
   database = NULL,
@@ -20,6 +22,10 @@ ezql_new(
 \item{table}{A string specifying the name of the table to be created.}
 
 \item{rosetta}{A data frame that maps R column names to SQL column names and types.}
+
+\item{rosetta_names_col}{A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.}
+
+\item{rosetta_sql_types_col}{A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.}
 
 \item{primary_key}{A string specifying the column to set as the primary key. Defaults to `NULL` and no primary key is set if not provided.}
 

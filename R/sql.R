@@ -719,6 +719,8 @@ ezql_new_internal <- function(df,
 #' @param df A data frame containing the data to be inserted into the new table.
 #' @param table A string specifying the name of the table to be created.
 #' @param rosetta A data frame that maps R column names to SQL column names and types.
+#' @param rosetta_names_col A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.
+#' @param rosetta_sql_types_col A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.
 #' @param schema A string specifying the schema name. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.
 #' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
 #' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
@@ -730,6 +732,8 @@ ezql_new_internal <- function(df,
 ezql_new <- function(df,
                      table,
                      rosetta,
+                     rosetta_names_col = "sql_name",
+                     rosetta_sql_types_col = "sql_type",
                      primary_key = NULL,
                      schema = NULL,
                      database = NULL,
@@ -746,7 +750,11 @@ ezql_new <- function(df,
     stop(stringr::str_c("Table '", schema, ".", table, "' already exists."))
   }
 
-  ezql_new_internal(df, table, rosetta, schema = schema, database = database, address = address, primary_key = primary_key)
+  ezql_new_internal(df, table, rosetta,
+                    rosetta_names_col = rosetta_names_col,
+                    rosetta_sql_types_col = rosetta_sql_types_col,
+                    schema = schema, database = database, address = address,
+                    primary_key = primary_key)
 }
 
 #' Replace an Existing Table in the Database
@@ -756,6 +764,8 @@ ezql_new <- function(df,
 #' @param df A data frame containing the data to be inserted into the new table.
 #' @param table A string specifying the name of the table to be replaced.
 #' @param rosetta A data frame that maps R column names to SQL column names and types.
+#' @param rosetta_names_col A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.
+#' @param rosetta_sql_types_col A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.
 #' @param schema A string specifying the schema name. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.
 #' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
 #' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
@@ -767,6 +777,8 @@ ezql_new <- function(df,
 ezql_replace <- function(df,
                          table,
                          rosetta,
+                         rosetta_names_col = "sql_name",
+                         rosetta_sql_types_col = "sql_type",
                          primary_key = NULL,
                          schema = NULL,
                          database = NULL,
@@ -793,7 +805,11 @@ ezql_replace <- function(df,
     stop("Error dropping table: ", drop_result[[1]]$error)
   }
 
-  ezql_new_internal(df, table, rosetta, schema = schema, database = database, address = address, primary_key = primary_key)
+  ezql_new_internal(df, table, rosetta,
+                    rosetta_names_col = rosetta_names_col,
+                    rosetta_sql_types_col = rosetta_sql_types_col,
+                    schema = schema, database = database, address = address,
+                    primary_key = primary_key)
 }
 
 #' Construct Full Table Name for SQL Queries
