@@ -825,3 +825,703 @@ ezql_replace <- function(df,
 ezql_full_table_name <- function(schema, table) {
   stringr::str_c(schema, ".", table)
 }
+
+#' Retrieve Column Names of a SQL Table
+#'
+#' This function retrieves the column names of a specified table from a SQL database.
+#'
+#' @param table A string specifying the name of the SQL table.
+#' @param schema A string specifying the schema of the SQL table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return A character vector of column names in the specified table.
+#'
+#' @details
+#' The function constructs and executes a SQL query to fetch the column names of the specified
+#' table. If \code{schema}, \code{database}, or \code{address} are not explicitly provided,
+#' they are inferred from predefined global defaults.
+#'
+#' @examples
+#' \dontrun{
+#' # Retrieve column names from a table
+#' column_names <- ezql_table_names(
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' print(column_names)
+#' }
+#'
+#' @seealso \code{\link{ezql_query}}, \code{\link{ezql_connect}}
+#' @export
+ezql_table_names <- function(table, schema = NULL, database = NULL, address = NULL) {
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  }
+
+  # Construct SQL query to retrieve column names
+  query <- stringr::str_c(
+    "SELECT TOP 0 * FROM ", schema, ".", table
+  )
+
+  # Execute the query and extract column names
+  result <- ezql_query(query, database, address)
+  column_names <- names(result[[1]]$result)
+
+  return(column_names)
+}
+
+
+
+#' Add Data to a SQL Table
+#'
+#' Appends data from a data frame to a specified table in a SQL database.
+#' Ensures that the column names in the data frame match those in the table.
+#'
+#' @param df A data frame containing the data to add.
+#' @param table A string specifying the name of the target SQL table.
+#' @param breakdown A tibble returned by \code{ezql_check_table()} with pre-validated data.
+#' Defaults to \code{NULL}, and validation is performed within the function.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return No return value. This function is called for its side effects of adding
+#' data to the specified SQL table. If no rows are added, a message is printed.
+#'
+#' @details
+#' If \code{breakdown} is provided, the function assumes that the data frame has
+#' already been validated. Otherwise, it runs \code{ezql_check_table()} to validate
+#' the input.
+#'
+#' @examples
+#' \dontrun{
+#' # Add rows to a table
+#' ezql_add_data(
+#'   df = my_data,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' }
+#'
+#' @seealso \code{\link{ezql_check_table}}
+#' @export
+ezql_add_data <- function(df,
+                          table,
+                          breakdown = NULL,
+                          schema = NULL,
+                          database = NULL,
+                          address = NULL) {
+
+  # Perform checks and get breakdown
+  if(is.null(breakdown)) {
+    breakdown <- ezql_check_table(df, table, schema = schema, database = database, address)
+  }
+
+  schema <- breakdown$schema
+  database <- breakdown$database
+  address <- breakdown$address
+  data_added <- breakdown$data_added[[1]]
+
+  # Exit early if there are no rows to add
+  if (nrow(data_added) == 0) {
+    message("No rows to add.")
+    return(invisible(NULL))
+  }
+
+  # Connect to the SQL server
+  connection <- ezql_connect(database, address)
+  full_table_name <- ezql_full_table_name(schema, table)
+
+  # Add the data
+  tryCatch(
+    {
+      custom_sqlSave(
+        channel = connection,
+        dat = data_added,
+        tablename = full_table_name,
+        append = TRUE,
+        rownames = FALSE,
+        verbose = TRUE
+      )
+      message("Rows successfully added.")
+    },
+    error = function(e) {
+      stop("Failed to add rows: ", e$message)
+    }
+  )
+
+  # Close the connection
+  RODBC::odbcClose(connection)
+}
+
+
+#' Update Data in a SQL Table
+#'
+#' Updates rows in a specified SQL table using a data frame. Ensures the data
+#' frame matches the table structure and updates only rows that differ.
+#'
+#' @param df A data frame containing the data to update.
+#' @param table A string specifying the name of the target SQL table.
+#' @param breakdown A tibble returned by \code{ezql_check_table()} with pre-validated data.
+#' Defaults to \code{NULL}, and validation is performed within the function.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return No return value. This function is called for its side effects of updating
+#' rows in the specified SQL table. If no rows are updated, a message is printed.
+#'
+#' @details
+#' If \code{breakdown} is provided, the function assumes that the data frame has
+#' already been validated. Otherwise, it runs \code{ezql_check_table()} to validate
+#' the input.
+#'
+#' @examples
+#' \dontrun{
+#' # Update rows in a table
+#' ezql_alter_data(
+#'   df = updated_data,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' }
+#'
+#' @seealso \code{\link{ezql_check_table}}
+#' @export
+ezql_alter_data <- function(df,
+                            table,
+                            breakdown = NULL,
+                            schema = NULL,
+                            database = NULL,
+                            address = NULL) {
+
+  # Perform checks and get breakdown
+  if(is.null(breakdown)) {
+    breakdown <- ezql_check_table(df, table, schema = schema, database = database, address)
+  }
+  schema <- breakdown$schema
+  database <- breakdown$database
+  address <- breakdown$address
+
+  data_altered <- breakdown$data_altered[[1]]
+
+  # Exit early if there are no rows to alter
+  if (nrow(data_altered) == 0) {
+    message("No rows to update.")
+    return(invisible(NULL))
+  }
+
+  # Connect to the SQL server
+  connection <- ezql_connect(database, address)
+  full_table_name <- ezql_full_table_name(schema, table)
+
+  # Perform the update using RODBC::sqlUpdate
+  tryCatch(
+    {
+      RODBC::sqlUpdate(
+        channel = connection,
+        dat = data_altered,
+        tablename = full_table_name,
+        index = ezql_primary_key_name(table, schema, database, address),
+        verbose = TRUE
+      )
+      message("Rows successfully updated.")
+    },
+    error = function(e) {
+      stop("Failed to update rows: ", e$message)
+    }
+  )
+
+  # Close the connection
+  RODBC::odbcClose(connection)
+}
+
+
+
+#' Delete Rows from a SQL Table
+#'
+#' Deletes rows from a SQL table based on a data frame. Ensures that only rows
+#' present in both the data frame and the table are deleted.
+#'
+#' @param df A data frame containing the rows to delete.
+#' @param table A string specifying the name of the target SQL table.
+#' @param breakdown A tibble returned by \code{ezql_check_table()} with pre-validated data.
+#' Defaults to \code{NULL}, and validation is performed within the function.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return No return value. This function is called for its side effects of deleting
+#' rows from the specified SQL table. If no rows are deleted, a message is printed.
+#'
+#' @details
+#' If \code{breakdown} is provided, the function assumes that the data frame has
+#' already been validated. Otherwise, it runs \code{ezql_check_table()} to validate
+#' the input.
+#'
+#' @examples
+#' \dontrun{
+#' # Delete rows from a table
+#' ezql_delete_data(
+#'   df = rows_to_remove,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' }
+#'
+#' @seealso \code{\link{ezql_check_table}}
+#' @export
+ezql_delete_data <- function(df,
+                             table,
+                             breakdown = NULL,
+                             schema = NULL,
+                             database = NULL,
+                             address = NULL) {
+  # Perform checks and get breakdown
+  if(is.null(breakdown)) {
+    breakdown <- ezql_check_table(df, table, schema = schema, database = database, address)
+  }
+  schema <- breakdown$schema
+  database <- breakdown$database
+  address <- breakdown$address
+  data_to_be_deleted <- breakdown$data_to_be_deleted[[1]]
+
+  # Retrieve primary key
+  primary_key_name <- ezql_primary_key_name(table, schema, database, address)
+
+  # Ensure alignment between data_to_be_deleted and df
+  rows_to_delete <- data_to_be_deleted %>%
+    pull(all_of(primary_key_name))
+
+  # Exit early if no rows to delete
+  if (length(rows_to_delete) == 0) {
+    message("No rows to delete.")
+    return(invisible(NULL))
+  }
+
+  # Check the type of the primary key values and construct the WHERE clause accordingly
+  if (is.numeric(rows_to_delete)) {
+    # Numeric values: no quotes needed
+    where_conditions <- str_c(primary_key_name, " IN (", str_c(rows_to_delete, collapse = ", "), ")")
+  } else {
+    # Character values: wrap in single quotes
+    where_conditions <- str_c(primary_key_name, " IN (", str_c(str_c("'", rows_to_delete, "'"), collapse = ", "), ")")
+  }
+
+  delete_query <- paste0("DELETE FROM ", schema, ".", table, " WHERE ", where_conditions)
+
+  # Debug: Print query if needed
+  # print(delete_query)
+
+  # Connect to the SQL server and execute the bulk delete query
+  connection <- ezql_connect(database, address)
+  tryCatch(
+    {
+      res <- RODBC::sqlQuery(connection, delete_query)
+      if (!is.null(attr(res, "error"))) {
+        stop("Error executing query: ", attr(res, "error"))
+      }
+      message(length(rows_to_delete), " row(s) deleted from the table.")
+    },
+    error = function(e) {
+      stop("Failed to delete rows: ", e$message)
+    }
+  )
+  RODBC::odbcClose(connection)
+}
+
+
+
+#' Edit a SQL Table
+#'
+#' A wrapper function that combines adding, updating, and deleting rows in a SQL table
+#' based on a data frame. Allows for a comprehensive table update in one step.
+#'
+#' @param df A data frame containing the new data for the SQL table.
+#' @param table A string specifying the name of the target SQL table.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#' @param delete_missing_rows Logical. If \code{TRUE}, rows in the SQL table but not
+#' in the data frame are deleted. Defaults to \code{FALSE}.
+#'
+#' @return A list summarizing the number of rows added, updated, and deleted.
+#'
+#' @examples
+#' \dontrun{
+#' # Edit a table by adding, updating, and optionally deleting rows
+#' result <- ezql_edit(
+#'   df = new_data,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server",
+#'   delete_missing_rows = TRUE
+#' )
+#' print(result)
+#' }
+#'
+#' @seealso \code{\link{ezql_add_data}}, \code{\link{ezql_alter_data}}, \code{\link{ezql_delete_data}}
+#' @export
+ezql_edit <- function(df,
+                      table,
+                      schema = NULL,
+                      database = NULL,
+                      address = NULL,
+                      delete_missing_rows = FALSE) {
+  # Perform checks and get breakdown
+  breakdown <-
+    ezql_check_table(df, table, schema = schema, database = database, address)
+
+  # Add new rows
+  ezql_add_data(df, table, breakdown = breakdown)
+
+  # Update existing rows
+  ezql_alter_data(df, table, breakdown = breakdown)
+
+  # Delete rows if specified
+  if (delete_missing_rows) {
+    ezql_delete_data(df, table, breakdown = breakdown)
+  } else {
+    warning("Missing rows were not deleted. Set `delete_missing_rows = TRUE` to remove them.")
+  }
+
+  # Return a summary
+  return(list(
+    added = nrow(breakdown$data_added[[1]]),
+    altered = nrow(breakdown$data_altered[[1]]),
+    deleted = if (delete_missing_rows)
+      nrow(breakdown$data_deleted[[1]])
+    else
+      0
+  ))
+}
+
+
+#' Retrieve the Primary Key Name for a SQL Table
+#'
+#' Fetches the name of the primary key column(s) for a specified table in a SQL database.
+#'
+#' @param table A string specifying the name of the SQL table.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return A character vector of column names that make up the primary key. Returns
+#' \code{NULL} if the table has no primary key.
+#'
+#' @details
+#' Queries the SQL server to identify the primary key columns for the specified table.
+#' If no primary key exists, the function returns \code{NULL}.
+#'
+#' @examples
+#' \dontrun{
+#' # Retrieve the primary key of a table
+#' pk <- ezql_primary_key_name(
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' print(pk)
+#' }
+#'
+#' @seealso \code{\link{ezql_query}}, \code{\link{ezql_details_schema}}
+#' @export
+ezql_primary_key_name <- function(table, schema = NULL, database = NULL, address = NULL) {
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  }
+
+  # SQL query to fetch primary key information
+  pk_query <- stringr::str_c(
+    "SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+     WHERE TABLE_SCHEMA = '", schema, "' AND TABLE_NAME = '", table, "'"
+  )
+
+  # Execute the query using ezql_query
+  result <- ezql_query(pk_query, database, address)
+
+  # Extract the result from the returned list
+  pk_data <- result[[1]]$result
+
+  # Check if there are any primary keys
+  if (nrow(pk_data) == 0) {
+    return(NULL)
+  }
+
+  # Return the primary key as a tibble
+  return((pk_data$COLUMN_NAME))
+}
+
+
+#' Retrieve Primary Key Data from a SQL Table
+#'
+#' Fetches the data for the primary key column(s) from a specified table in a SQL database.
+#'
+#' @param table A string specifying the name of the SQL table.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return A tibble containing the data for the primary key column(s).
+#'
+#' @details
+#' This function retrieves the primary key column(s) from a specified table
+#' and returns their data as a tibble. If the table does not have a primary key,
+#' the function stops with an error.
+#'
+#' @examples
+#' \dontrun{
+#' # Retrieve primary key data
+#' pk_data <- ezql_primary_key_data(
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' print(pk_data)
+#' }
+#'
+#' @seealso \code{\link{ezql_primary_key_name}}, \code{\link{ezql_query}}
+#' @export
+ezql_primary_key_data <- function(table, schema = NULL, database = NULL, address = NULL) {
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  }
+
+  # Get the primary key name(s)
+  primary_key <- ezql_primary_key_name(table, schema, database, address)
+
+  if (is.null(primary_key)) {
+    stop("No primary key found for the table. Cannot retrieve primary key data.")
+  }
+
+  # Construct a SQL query to retrieve only the primary key column(s)
+  pk_query <- stringr::str_c(
+    "SELECT ", paste(primary_key, collapse = ", "),
+    " FROM ", schema, ".", table
+  )
+
+  # Execute the query using ezql_query
+  result <- ezql_query(pk_query, database, address)
+
+  # Extract the result from the returned list
+  pk_data <- result[[1]]$result
+
+  # Return the primary key data as a tibble
+  return(tibble::as_tibble (pk_data))
+}
+
+
+#' Validate a Data Frame Against a SQL Table
+#'
+#' Checks the compatibility of a data frame with a specified SQL table by validating
+#' column names, primary keys, and identifying rows to add, update, or delete.
+#'
+#' @param df A data frame to validate against the SQL table.
+#' @param table A string specifying the name of the SQL table.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return A tibble containing:
+#' \itemize{
+#'   \item \code{data_added}: Rows in \code{df} not present in the table.
+#'   \item \code{data_altered}: Rows in \code{df} with matching primary keys but different values.
+#'   \item \code{data_deleted}: Rows in the table not present in \code{df}.
+#'   \item \code{data_to_be_deleted}: Rows in both \code{df} and the table.
+#'   \item \code{schema}: The schema name.
+#'   \item \code{database}: The database name.
+#'   \item \code{address}: The server address.
+#' }
+#'
+#' @details
+#' This function ensures that the data frame and SQL table are compatible for operations
+#' like adding, updating, or deleting rows. It checks for column name mismatches,
+#' duplicate primary key values in \code{df}, and the presence of a primary key in the table.
+#'
+#' @examples
+#' \dontrun{
+#' # Validate a data frame against a table
+#' breakdown <- ezql_check_table(
+#'   df = my_data,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' print(breakdown$data_added)
+#' }
+#'
+#' @seealso \code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}
+#' @export
+ezql_check_table <- function(df, table, schema = NULL, database = NULL, address = NULL) {
+  # Resolve defaults
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  }
+
+  # Step 1: Confirm that the table exists
+  if (!ezql_table_exists(table, schema, database, address)) {
+    stop("This table does not exist on the SQL server.")
+  }
+
+  # Step 2: Retrieve primary key and confirm its presence
+  primary_key <- ezql_primary_key_name(table, schema, database, address)
+  if (is.null(primary_key)) {
+    stop("The table does not have a primary key.")
+  }
+
+  # Step 3: Retrieve server table column names and confirm column name matching
+  server_table_names <- ezql_table_names(table, schema, database, address)
+  if (!identical(sort(names(df)), sort(server_table_names))) {
+    stop("The dataframe provided and the table on the server have different column names.")
+  }
+
+  # Step 4: Check for duplicate primary keys in the dataframe
+  duplicate_keys <- df %>%
+    dplyr::group_by(across(all_of(primary_key))) %>%
+    dplyr::summarise(count = dplyr::n(), .groups = "drop") %>%
+    dplyr::filter(count > 1)
+
+  if (nrow(duplicate_keys) > 0) {
+    stop("The dataframe contains duplicate primary key values:\n",
+         paste(capture.output(print(duplicate_keys)), collapse = "\n"))
+  }
+
+  # Step 5: Retrieve existing data from the server
+  server_data <- ezql_get(table, schema = schema, database = database, address = address)
+
+  # Step 6: Identify rows to add, alter, delete, and to be deleted
+  new_and_edited_rows <- dplyr::anti_join(df, server_data)
+  data_added <- dplyr::anti_join(new_and_edited_rows, server_data, by = primary_key)
+  data_altered <- dplyr::semi_join(new_and_edited_rows, server_data, by = primary_key)
+  data_deleted <- dplyr::anti_join(server_data, df, by = primary_key)
+  data_to_be_deleted <- dplyr::anti_join(server_data, df, by = primary_key)
+
+  # Return results
+  return(tibble::tibble(
+    data_added = list(data_added),
+    data_altered = list(data_altered),
+    data_deleted = list(data_deleted),
+    data_to_be_deleted = list(data_to_be_deleted),
+    schema = schema,
+    database = database,
+    address = address
+  ))
+}
+
+
+#' Drop a SQL Table
+#'
+#' Deletes a specified table from a SQL database.
+#'
+#' @param table A string specifying the name of the SQL table to be dropped.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#'
+#' @return Invisible \code{NULL}. The function is called for its side effect of
+#' deleting the specified table from the database.
+#'
+#' @details
+#' This function constructs and executes a SQL \code{DROP TABLE} query to remove
+#' the specified table from the database. If the table does not exist or the query
+#' fails, an error is raised.
+#'
+#' @examples
+#' \dontrun{
+#' # Drop a table from the database
+#' ezql_drop(
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' }
+#'
+#' @seealso \code{\link{ezql_query}}, \code{\link{ezql_details_schema}}, \code{\link{ezql_details_db}}
+#' @export
+ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
+  # Retrieve default values if not provided
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  }
+
+  # Construct full table name
+  full_table_name <- ezql_full_table_name(schema, table)
+
+  # Construct the SQL query to delete the table
+  delete_query <- stringr::str_c("DROP TABLE ", full_table_name, ";")
+
+  # Execute the query using ezql_query
+  result <- ezql_query(delete_query, database, address)
+
+  # Check the result and handle errors or success
+  if (!result[[1]]$success) {
+    stop("Failed to delete the table: ", result[[1]]$error)
+  } else {
+    message("Table '", full_table_name, "' was successfully deleted.")
+    return(invisible(NULL))
+  }
+}
+
+
