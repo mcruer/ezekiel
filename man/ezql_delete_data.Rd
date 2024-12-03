@@ -2,7 +2,7 @@
 % Please edit documentation in R/sql.R
 \name{ezql_delete_data}
 \alias{ezql_delete_data}
-\title{Delete Rows from a SQL Table}
+\title{Delete Rows from a SQL Table with Data Type Handling}
 \usage{
 ezql_delete_data(
   df,
@@ -10,7 +10,10 @@ ezql_delete_data(
   breakdown = NULL,
   schema = NULL,
   database = NULL,
-  address = NULL
+  address = NULL,
+  rosetta = NULL,
+  names_column = "names",
+  type_function_column = "type_function"
 )
 }
 \arguments{
@@ -29,29 +32,63 @@ retrieved from \code{ezql_details_db()}.}
 
 \item{address}{A string specifying the server address. Defaults to the value
 retrieved from \code{ezql_details_add()}.}
+
+\item{rosetta}{A data frame (or tibble) used for column-level data type transformations.
+This should contain at least two columns: one for column names and one for the associated type transformation functions.
+Defaults to \code{NULL}, meaning no transformations will be applied.}
+
+\item{names_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+
+\item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
 }
 \value{
 No return value. This function is called for its side effects of deleting
 rows from the specified SQL table. If no rows are deleted, a message is printed.
 }
 \description{
-Deletes rows from a SQL table based on a data frame. Ensures that only rows
-present in both the data frame and the table are deleted.
+Deletes rows from a SQL table based on a data frame, with optional data type transformations applied to ensure compatibility. Ensures that only rows present in both the data frame and the table are deleted.
 }
 \details{
 If \code{breakdown} is provided, the function assumes that the data frame has
 already been validated. Otherwise, it runs \code{ezql_check_table()} to validate
-the input.
+the input. If \code{rosetta} is provided, it applies the specified type transformations
+to the columns in the data frame before attempting the delete operation. Columns
+not listed in the \code{rosetta} will remain unchanged.
+
+The \code{rosetta} data frame must have one column (specified by \code{names_column})
+listing the column names in \code{df} to be transformed, and another column
+(specified by \code{type_function_column}) containing the names of functions
+to be applied for the transformations.
+
+Deletes are performed in bulk using the primary key of the table. The function
+constructs a \code{WHERE} clause based on the primary key values from the data frame.
 }
 \examples{
 \dontrun{
-# Delete rows from a table
+# Delete rows from a table without transformations
 ezql_delete_data(
   df = rows_to_remove,
   table = "my_table",
   schema = "dbo",
   database = "my_database",
   address = "my_server"
+)
+
+# Delete rows with type transformations using a rosetta data frame
+rosetta <- tibble::tibble(
+  names = c("column1", "column2"),
+  type_function = c("as.character", "as.numeric")
+)
+
+ezql_delete_data(
+  df = rows_to_remove,
+  table = "my_table",
+  schema = "dbo",
+  database = "my_database",
+  address = "my_server",
+  rosetta = rosetta
 )
 }
 

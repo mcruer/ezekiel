@@ -2,7 +2,7 @@
 % Please edit documentation in R/sql.R
 \name{ezql_edit}
 \alias{ezql_edit}
-\title{Edit a SQL Table}
+\title{Edit a SQL Table with Data Type Handling}
 \usage{
 ezql_edit(
   df,
@@ -10,7 +10,10 @@ ezql_edit(
   schema = NULL,
   database = NULL,
   address = NULL,
-  delete_missing_rows = FALSE
+  delete_missing_rows = FALSE,
+  rosetta = NULL,
+  names_column = "names",
+  type_function_column = "type_function"
 )
 }
 \arguments{
@@ -29,13 +32,39 @@ retrieved from \code{ezql_details_add()}.}
 
 \item{delete_missing_rows}{Logical. If \code{TRUE}, rows in the SQL table but not
 in the data frame are deleted. Defaults to \code{FALSE}.}
+
+\item{rosetta}{A data frame (or tibble) used for column-level data type transformations.
+This should contain at least two columns: one for column names and one for the associated type transformation functions.
+Defaults to \code{NULL}, meaning no transformations will be applied.}
+
+\item{names_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+
+\item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
 }
 \value{
 A list summarizing the number of rows added, updated, and deleted.
 }
 \description{
 A wrapper function that combines adding, updating, and deleting rows in a SQL table
-based on a data frame. Allows for a comprehensive table update in one step.
+based on a data frame. Allows for a comprehensive table update in one step, with
+optional data type transformations.
+}
+\details{
+This function performs a full edit of the specified SQL table by:
+1. Adding new rows present in the data frame but not in the SQL table.
+2. Updating rows in the SQL table that differ from the corresponding rows in the data frame.
+3. Optionally deleting rows in the SQL table that are not present in the data frame (if \code{delete_missing_rows = TRUE}).
+
+If \code{rosetta} is provided, the function applies the specified type transformations
+to the columns in the data frame before attempting any operations. Columns not listed
+in the \code{rosetta} will remain unchanged.
+
+The \code{rosetta} data frame must have one column (specified by \code{names_column})
+listing the column names in \code{df} to be transformed, and another column
+(specified by \code{type_function_column}) containing the names of functions
+to be applied for the transformations.
 }
 \examples{
 \dontrun{
@@ -49,9 +78,26 @@ result <- ezql_edit(
   delete_missing_rows = TRUE
 )
 print(result)
+
+# Edit a table with type transformations using a rosetta data frame
+rosetta <- tibble::tibble(
+  names = c("column1", "column2"),
+  type_function = c("as.character", "as.numeric")
+)
+
+result <- ezql_edit(
+  df = new_data,
+  table = "my_table",
+  schema = "dbo",
+  database = "my_database",
+  address = "my_server",
+  delete_missing_rows = TRUE,
+  rosetta = rosetta
+)
+print(result)
 }
 
 }
 \seealso{
-\code{\link{ezql_add_data}}, \code{\link{ezql_alter_data}}, \code{\link{ezql_delete_data}}
+\code{\link{ezql_add_data}}, \code{\link{ezql_alter_data}}, \code{\link{ezql_delete_data}}, \code{\link{ezql_check_table}}
 }

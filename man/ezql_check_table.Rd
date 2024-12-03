@@ -2,9 +2,18 @@
 % Please edit documentation in R/sql.R
 \name{ezql_check_table}
 \alias{ezql_check_table}
-\title{Validate a Data Frame Against a SQL Table}
+\title{Validate a Data Frame Against a SQL Table with Data Type Handling}
 \usage{
-ezql_check_table(df, table, schema = NULL, database = NULL, address = NULL)
+ezql_check_table(
+  df,
+  table,
+  schema = NULL,
+  database = NULL,
+  address = NULL,
+  rosetta = NULL,
+  names_column = "names",
+  type_function_column = "type_function"
+)
 }
 \arguments{
 \item{df}{A data frame to validate against the SQL table.}
@@ -19,6 +28,16 @@ retrieved from \code{ezql_details_db()}.}
 
 \item{address}{A string specifying the server address. Defaults to the value
 retrieved from \code{ezql_details_add()}.}
+
+\item{rosetta}{A data frame (or tibble) used for column-level data type transformations.
+This should contain at least two columns: one for column names and one for the associated type transformation functions.
+Defaults to \code{NULL}, meaning no transformations will be applied.}
+
+\item{names_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+
+\item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
 }
 \value{
 A tibble containing:
@@ -35,11 +54,27 @@ A tibble containing:
 \description{
 Checks the compatibility of a data frame with a specified SQL table by validating
 column names, primary keys, and identifying rows to add, update, or delete.
+Optionally applies data type transformations based on a "rosetta" data frame.
 }
 \details{
 This function ensures that the data frame and SQL table are compatible for operations
-like adding, updating, or deleting rows. It checks for column name mismatches,
-duplicate primary key values in \code{df}, and the presence of a primary key in the table.
+like adding, updating, or deleting rows. It performs the following checks:
+\enumerate{
+  \item Confirms the SQL table exists on the server.
+  \item Ensures the table has a primary key.
+  \item Validates column names in \code{df} against the table structure.
+  \item Identifies duplicate primary key values in \code{df}.
+  \item Retrieves existing rows from the SQL table and identifies differences.
+}
+
+If \code{rosetta} is provided, the function applies type transformations to the server data
+before performing any comparisons. This ensures compatibility between the data frame and
+the SQL table when column types differ.
+
+The \code{rosetta} data frame must have one column (specified by \code{names_column})
+listing the column names in \code{df} to be transformed, and another column
+(specified by \code{type_function_column}) containing the names of functions
+to be applied for the transformations.
 }
 \examples{
 \dontrun{
@@ -52,9 +87,24 @@ breakdown <- ezql_check_table(
   address = "my_server"
 )
 print(breakdown$data_added)
+
+# Validate with type transformations using a rosetta data frame
+rosetta <- tibble::tibble(
+  names = c("column1", "column2"),
+  type_function = c("as.character", "as.numeric")
+)
+breakdown <- ezql_check_table(
+  df = my_data,
+  table = "my_table",
+  schema = "dbo",
+  database = "my_database",
+  address = "my_server",
+  rosetta = rosetta
+)
+print(breakdown$data_added)
 }
 
 }
 \seealso{
-\code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}
+\code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}, \code{\link{ezql_set_data_types}}
 }

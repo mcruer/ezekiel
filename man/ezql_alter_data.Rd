@@ -2,7 +2,7 @@
 % Please edit documentation in R/sql.R
 \name{ezql_alter_data}
 \alias{ezql_alter_data}
-\title{Update Data in a SQL Table}
+\title{Update Data in a SQL Table with Data Type Handling}
 \usage{
 ezql_alter_data(
   df,
@@ -10,7 +10,10 @@ ezql_alter_data(
   breakdown = NULL,
   schema = NULL,
   database = NULL,
-  address = NULL
+  address = NULL,
+  rosetta = NULL,
+  names_column = "names",
+  type_function_column = "type_function"
 )
 }
 \arguments{
@@ -29,29 +32,60 @@ retrieved from \code{ezql_details_db()}.}
 
 \item{address}{A string specifying the server address. Defaults to the value
 retrieved from \code{ezql_details_add()}.}
+
+\item{rosetta}{A data frame (or tibble) used for column-level data type transformations.
+This should contain at least two columns: one for column names and one for the associated type transformation functions.
+Defaults to \code{NULL}, meaning no transformations will be applied.}
+
+\item{names_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+
+\item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
 }
 \value{
 No return value. This function is called for its side effects of updating
 rows in the specified SQL table. If no rows are updated, a message is printed.
 }
 \description{
-Updates rows in a specified SQL table using a data frame. Ensures the data
-frame matches the table structure and updates only rows that differ.
+Updates rows in a specified SQL table using a data frame, with optional data type transformations based on a "rosetta" data frame. Ensures the data frame matches the table structure and updates only rows that differ.
 }
 \details{
 If \code{breakdown} is provided, the function assumes that the data frame has
 already been validated. Otherwise, it runs \code{ezql_check_table()} to validate
-the input.
+the input. If \code{rosetta} is provided, it applies the specified type transformations
+to the columns in the data frame before attempting the update. Columns not listed
+in the \code{rosetta} will remain unchanged.
+
+The \code{rosetta} data frame must have one column (specified by \code{names_column})
+listing the column names in \code{df} to be transformed, and another column
+(specified by \code{type_function_column}) containing the names of functions
+to be applied for the transformations.
 }
 \examples{
 \dontrun{
-# Update rows in a table
+# Update rows in a table without transformations
 ezql_alter_data(
   df = updated_data,
   table = "my_table",
   schema = "dbo",
   database = "my_database",
   address = "my_server"
+)
+
+# Update rows with type transformations using a rosetta data frame
+rosetta <- tibble::tibble(
+  names = c("column1", "column2"),
+  type_function = c("as.character", "as.numeric")
+)
+
+ezql_alter_data(
+  df = updated_data,
+  table = "my_table",
+  schema = "dbo",
+  database = "my_database",
+  address = "my_server",
+  rosetta = rosetta
 )
 }
 
