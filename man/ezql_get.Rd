@@ -4,20 +4,31 @@
 \alias{ezql_get}
 \title{Fetch Data from SQL Table}
 \usage{
-ezql_get(table, schema = NULL, database = NULL, address = NULL)
+ezql_get(
+  table,
+  schema = NULL,
+  database = NULL,
+  address = NULL,
+  get_valid_dates = FALSE
+)
 }
 \arguments{
 \item{table}{The name of the SQL table.}
 
-\item{schema}{The schema name (default: NULL, will use ezql_details_schema()).}
+\item{schema}{The schema name (default: NULL, will use `ezql_details_schema()`).}
 
-\item{database}{The database name (default: NULL, will use ezql_details_db()).}
+\item{database}{The database name (default: NULL, will use `ezql_details_db()`).}
 
-\item{address}{The server address (default: NULL, will use ezql_details_add()).}
+\item{address}{The server address (default: NULL, will use `ezql_details_add()`).}
+
+\item{get_valid_dates}{Logical. If `TRUE`, attempts to include `ValidFrom` and
+`ValidTo` columns in the query. If these columns do not exist, the query
+will fail unless handled externally (default: `FALSE`).}
 }
 \value{
 A tibble containing the data from the specified SQL table.
 }
 \description{
-This function fetches all data from the specified SQL table.
+This function fetches all data from the specified SQL table, with an optional
+feature to include `ValidFrom` and `ValidTo` columns if they exist.
 }

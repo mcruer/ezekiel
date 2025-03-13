@@ -12,8 +12,9 @@ ezql_edit(
   address = NULL,
   delete_missing_rows = FALSE,
   rosetta = NULL,
-  names_column = "names",
-  type_function_column = "type_function"
+  names_column_r = "r",
+  names_column_sql = "sql",
+  type_function_column = "r_type"
 )
 }
 \arguments{
@@ -33,38 +34,56 @@ retrieved from \code{ezql_details_add()}.}
 \item{delete_missing_rows}{Logical. If \code{TRUE}, rows in the SQL table but not
 in the data frame are deleted. Defaults to \code{FALSE}.}
 
-\item{rosetta}{A data frame (or tibble) used for column-level data type transformations.
-This should contain at least two columns: one for column names and one for the associated type transformation functions.
-Defaults to \code{NULL}, meaning no transformations will be applied.}
+\item{rosetta}{A data frame (or tibble) used for column-level data type transformations
+and column name mapping. This should contain at least two columns: one for column names
+in the data frame, and one for column names in the SQL table. Optionally, a column for
+type transformation functions can be included. Defaults to \code{NULL}, meaning no
+transformations or name mapping will be applied.}
 
-\item{names_column}{A string specifying the column in the \code{rosetta} data frame
-that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+\item{names_column_r}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns in the data frame. Defaults to \code{"r"}.}
+
+\item{names_column_sql}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.}
 
 \item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
-that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.}
 }
 \value{
-A list summarizing the number of rows added, updated, and deleted.
+A list summarizing the number of rows added, updated, and deleted:
+\itemize{
+  \item \code{added}: Number of rows added to the table.
+  \item \code{altered}: Number of rows updated in the table.
+  \item \code{deleted}: Number of rows deleted from the table, if \code{delete_missing_rows = TRUE}.
+}
 }
 \description{
 A wrapper function that combines adding, updating, and deleting rows in a SQL table
 based on a data frame. Allows for a comprehensive table update in one step, with
-optional data type transformations.
+optional data type transformations and column name mapping.
 }
 \details{
 This function performs a full edit of the specified SQL table by:
-1. Adding new rows present in the data frame but not in the SQL table.
-2. Updating rows in the SQL table that differ from the corresponding rows in the data frame.
-3. Optionally deleting rows in the SQL table that are not present in the data frame (if \code{delete_missing_rows = TRUE}).
+\enumerate{
+  \item Mapping column names in the data frame to match those in the SQL table
+        using the \code{rosetta} data frame, if provided.
+  \item Adding new rows present in the data frame but not in the SQL table.
+  \item Updating rows in the SQL table that differ from the corresponding rows in the data frame.
+  \item Optionally deleting rows in the SQL table that are not present in the data frame
+        (if \code{delete_missing_rows = TRUE}).
+}
 
 If \code{rosetta} is provided, the function applies the specified type transformations
-to the columns in the data frame before attempting any operations. Columns not listed
+and column name mappings before attempting any operations. Columns not listed
 in the \code{rosetta} will remain unchanged.
 
-The \code{rosetta} data frame must have one column (specified by \code{names_column})
-listing the column names in \code{df} to be transformed, and another column
-(specified by \code{type_function_column}) containing the names of functions
-to be applied for the transformations.
+The \code{rosetta} data frame must have:
+\itemize{
+  \item One column (specified by \code{names_column_r}) listing the column names in the data frame.
+  \item One column (specified by \code{names_column_sql}) listing the corresponding column names in the SQL table.
+  \item Optionally, one column (specified by \code{type_function_column}) containing the names of functions
+        to be applied for data type transformations.
+}
 }
 \examples{
 \dontrun{
@@ -79,10 +98,11 @@ result <- ezql_edit(
 )
 print(result)
 
-# Edit a table with type transformations using a rosetta data frame
+# Edit a table with column mapping and type transformations using a rosetta data frame
 rosetta <- tibble::tibble(
-  names = c("column1", "column2"),
-  type_function = c("as.character", "as.numeric")
+  r = c("local_column1", "local_column2"),
+  sql = c("db_column1", "db_column2"),
+  r_type = c("as.character", "as.numeric")
 )
 
 result <- ezql_edit(

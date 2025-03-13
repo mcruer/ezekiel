@@ -12,8 +12,8 @@ ezql_alter_data(
   database = NULL,
   address = NULL,
   rosetta = NULL,
-  names_column = "names",
-  type_function_column = "type_function"
+  names_column_sql = "sql",
+  type_function_column = "r_type"
 )
 }
 \arguments{
@@ -37,11 +37,11 @@ retrieved from \code{ezql_details_add()}.}
 This should contain at least two columns: one for column names and one for the associated type transformation functions.
 Defaults to \code{NULL}, meaning no transformations will be applied.}
 
-\item{names_column}{A string specifying the column in the \code{rosetta} data frame
-that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+\item{names_column_sql}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.}
 
 \item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
-that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.}
 }
 \value{
 No return value. This function is called for its side effects of updating
@@ -57,8 +57,8 @@ the input. If \code{rosetta} is provided, it applies the specified type transfor
 to the columns in the data frame before attempting the update. Columns not listed
 in the \code{rosetta} will remain unchanged.
 
-The \code{rosetta} data frame must have one column (specified by \code{names_column})
-listing the column names in \code{df} to be transformed, and another column
+The \code{rosetta} data frame must have one column (specified by \code{names_column_sql})
+listing the column names in the SQL table, and another column
 (specified by \code{type_function_column}) containing the names of functions
 to be applied for the transformations.
 }
@@ -75,8 +75,8 @@ ezql_alter_data(
 
 # Update rows with type transformations using a rosetta data frame
 rosetta <- tibble::tibble(
-  names = c("column1", "column2"),
-  type_function = c("as.character", "as.numeric")
+  sql = c("column1", "column2"),
+  r_type = c("as.character", "as.numeric")
 )
 
 ezql_alter_data(

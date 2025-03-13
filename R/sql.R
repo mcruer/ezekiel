@@ -37,18 +37,23 @@ ezql_connect <- function(database = NULL, address = NULL) {
 
 #' Fetch Data from SQL Table
 #'
-#' This function fetches all data from the specified SQL table.
+#' This function fetches all data from the specified SQL table, with an optional
+#' feature to include `ValidFrom` and `ValidTo` columns if they exist.
 #'
 #' @param table The name of the SQL table.
-#' @param schema The schema name (default: NULL, will use ezql_details_schema()).
-#' @param database The database name (default: NULL, will use ezql_details_db()).
-#' @param address The server address (default: NULL, will use ezql_details_add()).
+#' @param schema The schema name (default: NULL, will use `ezql_details_schema()`).
+#' @param database The database name (default: NULL, will use `ezql_details_db()`).
+#' @param address The server address (default: NULL, will use `ezql_details_add()`).
+#' @param get_valid_dates Logical. If `TRUE`, attempts to include `ValidFrom` and
+#'   `ValidTo` columns in the query. If these columns do not exist, the query
+#'   will fail unless handled externally (default: `FALSE`).
 #' @return A tibble containing the data from the specified SQL table.
 #' @importFrom stringr str_c
 #' @importFrom tibble as_tibble
 #' @importFrom RODBC sqlQuery odbcClose
 #' @export
-ezql_get <- function(table, schema = NULL, database = NULL, address = NULL) {
+ezql_get <- function(table, schema = NULL, database = NULL, address = NULL,
+                     get_valid_dates = FALSE) {
   schema <- schema %||% ezql_details_schema()
   database <- database %||% ezql_details_db()
   address <- address %||% ezql_details_add()
@@ -58,7 +63,11 @@ ezql_get <- function(table, schema = NULL, database = NULL, address = NULL) {
   }
 
   full_table_name <- ezql_full_table_name(schema, table)
+  if(get_valid_dates) {
+    query <- stringr::str_c("SELECT *, ValidFrom, ValidTo FROM ", full_table_name)
+  } else {
   query <- stringr::str_c('SELECT * FROM ', full_table_name)
+  }
 
   connection <- ezql_connect(database = database, address = address)
 
@@ -76,6 +85,121 @@ ezql_get <- function(table, schema = NULL, database = NULL, address = NULL) {
   RODBC::odbcClose(connection)
   return(data)
 }
+
+#' Retrieve Data as of a Specific Date
+#'
+#' This function retrieves records from a specified table and its history,
+#' ensuring that all fields are properly type-aligned before filtering them
+#' by the specified `as_of` date. It uses internal details to fill in
+#' missing schema, database, or address values if they are not explicitly provided.
+#'
+#' @param table Character. The name of the table to query.
+#' @param as_of Character or Date. The date to filter the records on. Must be
+#'   in a format recognized by `lubridate::ymd`.
+#' @param schema Character (optional). The schema containing the table.
+#'   Defaults to the value from `ezql_details_schema()`.
+#' @param database Character (optional). The database containing the schema.
+#'   Defaults to the value from `ezql_details_db()`.
+#' @param address Character (optional). The server address. Defaults to the
+#'   value from `ezql_details_add()`.
+#' @return A data frame (tibble) containing the records from the table and its history
+#'   as of the given date. The records will include only rows where the `as_of` date
+#'   falls between the `ValidFrom` and `ValidTo` columns.
+#' @details
+#' The function combines current and historical records from the specified table. It first
+#' retrieves the data from the main table and a corresponding `_history` table. It then
+#' ensures that the data types of all shared columns match before merging the records.
+#' Finally, it filters the combined data to return only the records valid at the `as_of` date.
+#'
+#' If any of `schema`, `database`, or `address` are not provided, the function will attempt
+#' to obtain their values from the `ezql_details_*` functions. If these are not defined,
+#' the function will throw an error.
+#'
+#' The function internally uses the following helper functions:
+#' - `convert_to_same_class_vec()` for column-wise type alignment
+#' - `convert_to_same_class()` for data frame-level type alignment
+#'
+#' @examples
+#' \dontrun{
+#' # Example usage:
+#' result <- ezql_get_as_of(
+#'   table = "my_table",
+#'   as_of = "2025-03-01",
+#'   schema = "my_schema",
+#'   database = "my_database",
+#'   address = "my_server_address"
+#' )
+#' }
+#'
+#' @importFrom dplyr filter select bind_cols bind_rows all_of
+#' @importFrom lubridate ymd
+#' @importFrom purrr map2
+#' @importFrom gplyr quickm
+#' @importFrom readr parse_guess
+#' @export
+ezql_get_as_of <- function(table, as_of, schema = NULL, database = NULL,
+                           address = NULL){
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or through ezql_details.")
+  }
+
+  convert_to_same_class_vec <- function(x, reference_column) {
+    target_class <- class(reference_column)
+    if (target_class == "integer") {
+      return(as.integer(x))
+    } else if (target_class == "numeric") {
+      return(as.numeric(x))
+    } else if (target_class == "character") {
+      return(as.character(x))
+    } else if (target_class == "logical") {
+      return(as.logical(x))
+    } else {
+      stop("Unsupported target class")
+    }
+  }
+
+  convert_to_same_class <- function(df1, df2) {
+    # Find columns that exist in both data frames
+    col_names_to_convert <- intersect(names(df1), names(df2))
+
+    # Select columns that are in df1 but not in df2
+    cols_to_add_back <- df1 %>%
+      select(all_of(setdiff(names(df1), names(df2))))
+
+    # Select only the columns that need conversion
+    df1_subset <- df1 %>% dplyr::select(dplyr::all_of(col_names_to_convert))
+    df2_subset <- df2 %>% dplyr::select(dplyr::all_of(col_names_to_convert))
+
+    # Apply type conversion column by column, then convert to tibble
+    converted_columns <- purrr::map2(df1_subset, df2_subset, convert_to_same_class_vec) %>%
+      as_tibble()
+
+    # Bind the unconverted columns back in
+    bind_cols(converted_columns, cols_to_add_back)
+  }
+
+  current <- ezql_get(table,
+                      schema = schema,
+                      database = database,
+                      address = address,
+                      get_valid_dates = TRUE)
+  history <- ezql_get(str_c(table, "_history"),
+                      schema = schema,
+                      database = database,
+                      address = address,
+                      get_valid_dates = TRUE) %>%
+    convert_to_same_class(current)
+
+  bind_rows(current, history) %>%
+    gplyr::quickm(c(ValidFrom, ValidTo), readr::parse_guess) %>%
+    dplyr::filter(ymd(as_of) >= ValidFrom,
+                  ymd(as_of) <= ValidTo)
+}
+
 
 # This function modifies 'sqlwrite' function in RODBC package so that it can work with temporal tables
 # modify_rodbc_to_work_with_temporal <- function() {
@@ -881,6 +1005,161 @@ ezql_table_names <- function(table, schema = NULL, database = NULL, address = NU
 }
 
 
+
+#' Validate a Data Frame Against a SQL Table with Data Type Handling
+#'
+#' Checks the compatibility of a data frame with a specified SQL table by validating
+#' column names, primary keys, and identifying rows to add, update, or delete.
+#' Optionally applies data type transformations based on a "rosetta" data frame.
+#'
+#' @param df A data frame to validate against the SQL table.
+#' @param table A string specifying the name of the SQL table.
+#' @param schema A string specifying the schema of the table. Defaults to the value
+#' retrieved from \code{ezql_details_schema()}.
+#' @param database A string specifying the database name. Defaults to the value
+#' retrieved from \code{ezql_details_db()}.
+#' @param address A string specifying the server address. Defaults to the value
+#' retrieved from \code{ezql_details_add()}.
+#' @param rosetta A data frame (or tibble) used for column-level data type transformations.
+#' This should contain at least two columns: one for column names and one for the associated type transformation functions.
+#' Defaults to \code{NULL}, meaning no transformations will be applied.
+#' @param names_column_sql A string specifying the column in the \code{rosetta} data frame
+#' that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.
+#' @param type_function_column A string specifying the column in the \code{rosetta} data frame
+#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.
+#'
+#' @return A tibble containing:
+#' \itemize{
+#'   \item \code{data_added}: Rows in \code{df} not present in the table.
+#'   \item \code{data_altered}: Rows in \code{df} with matching primary keys but different values.
+#'   \item \code{data_deleted}: Rows in the table not present in \code{df}.
+#'   \item \code{data_to_be_deleted}: Duplicate of \code{data_deleted}, included for compatibility.
+#'   \item \code{schema}: The schema name.
+#'   \item \code{database}: The database name.
+#'   \item \code{address}: The server address.
+#' }
+#'
+#' @details
+#' This function ensures that the data frame and SQL table are compatible for operations
+#' like adding, updating, or deleting rows. It performs the following checks:
+#' \enumerate{
+#'   \item Confirms the SQL table exists on the server.
+#'   \item Ensures the table has a primary key.
+#'   \item Validates column names in \code{df} against the table structure.
+#'   \item Identifies duplicate primary key values in \code{df}.
+#'   \item Retrieves existing rows from the SQL table and identifies differences.
+#' }
+#'
+#' If \code{rosetta} is provided, the function applies type transformations to the server data
+#' before performing any comparisons. This ensures compatibility between the data frame and
+#' the SQL table when column types differ.
+#'
+#' The \code{rosetta} data frame must have one column (specified by \code{names_column_sql})
+#' listing the column names in the SQL table, and another column
+#' (specified by \code{type_function_column}) containing the names of functions
+#' to be applied for the transformations.
+#'
+#' @examples
+#' \dontrun{
+#' # Validate a data frame against a table
+#' breakdown <- ezql_check_table(
+#'   df = my_data,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server"
+#' )
+#' print(breakdown$data_added)
+#'
+#' # Validate with type transformations using a rosetta data frame
+#' rosetta <- tibble::tibble(
+#'   sql = c("column1", "column2"),
+#'   r_type = c("as.character", "as.numeric")
+#' )
+#' breakdown <- ezql_check_table(
+#'   df = my_data,
+#'   table = "my_table",
+#'   schema = "dbo",
+#'   database = "my_database",
+#'   address = "my_server",
+#'   rosetta = rosetta
+#' )
+#' print(breakdown$data_added)
+#' }
+#'
+#' @seealso \code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}, \code{\link{ezql_set_data_types}}
+#' @export
+ezql_check_table <- function(df, table, schema = NULL, database = NULL, address = NULL,
+                             rosetta = NULL, names_column_sql = "sql",
+                             type_function_column = "r_type"
+) {
+  # Resolve defaults
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  }
+
+  # Step 1: Confirm that the table exists
+  if (!ezql_table_exists(table, schema, database, address)) {
+    stop("This table does not exist on the SQL server.")
+  }
+
+  # Step 2: Retrieve primary key and confirm its presence
+  primary_key <- ezql_primary_key_name(table, schema, database, address)
+  if (is.null(primary_key)) {
+    stop("The table does not have a primary key.")
+  }
+
+  # Step 3: Retrieve server table column names and confirm column name matching
+  server_table_names <- ezql_table_names(table, schema, database, address)
+  if (!identical(sort(names(df)), sort(server_table_names))) {
+    stop("The dataframe provided and the table on the server have different column names.")
+  }
+
+  # Step 4: Check for duplicate primary keys in the dataframe
+  duplicate_keys <- df %>%
+    dplyr::group_by(across(all_of(primary_key))) %>%
+    dplyr::summarise(count = dplyr::n(), .groups = "drop") %>%
+    dplyr::filter(count > 1)
+
+  if (nrow(duplicate_keys) > 0) {
+    stop("The dataframe contains duplicate primary key values:\n",
+         paste(capture.output(print(duplicate_keys)), collapse = "\n"))
+  }
+
+  # Step 5: Retrieve existing data from the server
+  if(is.null(rosetta)){
+    server_data <- ezql_get(table, schema = schema, database = database, address = address)
+  } else {
+    server_data <- ezql_get(table, schema = schema, database = database, address = address) %>%
+      ezql_set_data_types(rosetta = rosetta,
+                          names_column = names_column_sql,
+                          type_function_column = type_function_column)
+  }
+
+
+  # Step 6: Identify rows to add, alter, delete, and to be deleted
+  new_and_edited_rows <- dplyr::anti_join(df, server_data)
+  data_added <- dplyr::anti_join(new_and_edited_rows, server_data, by = primary_key)
+  data_altered <- dplyr::semi_join(new_and_edited_rows, server_data, by = primary_key)
+  data_deleted <- dplyr::anti_join(server_data, df, by = primary_key)
+  data_to_be_deleted <- dplyr::anti_join(server_data, df, by = primary_key)
+
+  # Return results
+  return(tibble::tibble(
+    data_added = list(data_added),
+    data_altered = list(data_altered),
+    data_deleted = list(data_deleted),
+    data_to_be_deleted = list(data_to_be_deleted),
+    schema = schema,
+    database = database,
+    address = address
+  ))
+}
+
 #' Add Data to a SQL Table with Data Type Handling
 #'
 #' Appends data from a data frame to a specified table in a SQL database, with optional data type transformations based on a "rosetta" data frame.
@@ -899,10 +1178,10 @@ ezql_table_names <- function(table, schema = NULL, database = NULL, address = NU
 #' @param rosetta A data frame (or tibble) used for column-level data type transformations.
 #' This should contain at least two columns: one for column names and one for the associated type transformation functions.
 #' Defaults to \code{NULL}, meaning no transformations will be applied.
-#' @param names_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the names of the columns to be transformed. Defaults to \code{"names"}.
+#' @param names_column_sql A string specifying the column in the \code{rosetta} data frame
+#' that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.
 #' @param type_function_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.
+#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.
 #'
 #' @return No return value. This function is called for its side effects of adding
 #' data to the specified SQL table. If no rows are added, a message is printed.
@@ -914,8 +1193,8 @@ ezql_table_names <- function(table, schema = NULL, database = NULL, address = NU
 #' to the columns in the data frame before adding the data to the SQL table. Columns
 #' not listed in the \code{rosetta} will remain unchanged.
 #'
-#' The \code{rosetta} data frame must have one column (specified by \code{names_column})
-#' listing the column names in \code{df} to be transformed, and another column
+#' The \code{rosetta} data frame must have one column (specified by \code{names_column_sql})
+#' listing the column names in the SQL table, and another column
 #' (specified by \code{type_function_column}) containing the names of functions
 #' to be applied for the transformations.
 #'
@@ -932,8 +1211,8 @@ ezql_table_names <- function(table, schema = NULL, database = NULL, address = NU
 #'
 #' # Add rows with type transformations using a rosetta data frame
 #' rosetta <- tibble::tibble(
-#'   names = c("column1", "column2"),
-#'   type_function = c("as.character", "as.numeric")
+#'   sql = c("column1", "column2"),
+#'   r_type = c("as.character", "as.numeric")
 #' )
 #'
 #' ezql_add_data(
@@ -955,15 +1234,15 @@ ezql_add_data <- function(df,
                           database = NULL,
                           address = NULL,
                           rosetta = NULL,
-                          names_column = "names",
-                          type_function_column = "type_function"
+                          names_column_sql = "sql",
+                          type_function_column = "r_type"
                           ) {
 
   # Perform checks and get breakdown
   if(is.null(breakdown)) {
     breakdown <- breakdown <-
       ezql_check_table(df, table, schema = schema, database = database, address,
-                       rosetta, names_column, type_function_column)
+                       rosetta, names_column_sql, type_function_column)
   }
 
   schema <- breakdown$schema
@@ -1021,10 +1300,10 @@ ezql_add_data <- function(df,
 #' @param rosetta A data frame (or tibble) used for column-level data type transformations.
 #' This should contain at least two columns: one for column names and one for the associated type transformation functions.
 #' Defaults to \code{NULL}, meaning no transformations will be applied.
-#' @param names_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the names of the columns to be transformed. Defaults to \code{"names"}.
+#' @param names_column_sql A string specifying the column in the \code{rosetta} data frame
+#' that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.
 #' @param type_function_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.
+#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.
 #'
 #' @return No return value. This function is called for its side effects of updating
 #' rows in the specified SQL table. If no rows are updated, a message is printed.
@@ -1036,8 +1315,8 @@ ezql_add_data <- function(df,
 #' to the columns in the data frame before attempting the update. Columns not listed
 #' in the \code{rosetta} will remain unchanged.
 #'
-#' The \code{rosetta} data frame must have one column (specified by \code{names_column})
-#' listing the column names in \code{df} to be transformed, and another column
+#' The \code{rosetta} data frame must have one column (specified by \code{names_column_sql})
+#' listing the column names in the SQL table, and another column
 #' (specified by \code{type_function_column}) containing the names of functions
 #' to be applied for the transformations.
 #'
@@ -1054,8 +1333,8 @@ ezql_add_data <- function(df,
 #'
 #' # Update rows with type transformations using a rosetta data frame
 #' rosetta <- tibble::tibble(
-#'   names = c("column1", "column2"),
-#'   type_function = c("as.character", "as.numeric")
+#'   sql = c("column1", "column2"),
+#'   r_type = c("as.character", "as.numeric")
 #' )
 #'
 #' ezql_alter_data(
@@ -1077,15 +1356,15 @@ ezql_alter_data <- function(df,
                             database = NULL,
                             address = NULL,
                             rosetta = NULL,
-                            names_column = "names",
-                            type_function_column = "type_function"
+                            names_column_sql = "sql",
+                            type_function_column = "r_type"
                             ) {
 
   # Perform checks and get breakdown
   if(is.null(breakdown)) {
     breakdown <-
       ezql_check_table(df, table, schema = schema, database = database, address,
-                       rosetta, names_column, type_function_column)
+                       rosetta, names_column_sql, type_function_column)
   }
   schema <- breakdown$schema
   database <- breakdown$database
@@ -1143,10 +1422,10 @@ ezql_alter_data <- function(df,
 #' @param rosetta A data frame (or tibble) used for column-level data type transformations.
 #' This should contain at least two columns: one for column names and one for the associated type transformation functions.
 #' Defaults to \code{NULL}, meaning no transformations will be applied.
-#' @param names_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the names of the columns to be transformed. Defaults to \code{"names"}.
+#' @param names_column_sql A string specifying the column in the \code{rosetta} data frame
+#' that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.
 #' @param type_function_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.
+#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.
 #'
 #' @return No return value. This function is called for its side effects of deleting
 #' rows from the specified SQL table. If no rows are deleted, a message is printed.
@@ -1158,8 +1437,8 @@ ezql_alter_data <- function(df,
 #' to the columns in the data frame before attempting the delete operation. Columns
 #' not listed in the \code{rosetta} will remain unchanged.
 #'
-#' The \code{rosetta} data frame must have one column (specified by \code{names_column})
-#' listing the column names in \code{df} to be transformed, and another column
+#' The \code{rosetta} data frame must have one column (specified by \code{names_column_sql})
+#' listing the column names in the SQL table, and another column
 #' (specified by \code{type_function_column}) containing the names of functions
 #' to be applied for the transformations.
 #'
@@ -1179,8 +1458,8 @@ ezql_alter_data <- function(df,
 #'
 #' # Delete rows with type transformations using a rosetta data frame
 #' rosetta <- tibble::tibble(
-#'   names = c("column1", "column2"),
-#'   type_function = c("as.character", "as.numeric")
+#'   sql = c("column1", "column2"),
+#'   r_type = c("as.character", "as.numeric")
 #' )
 #'
 #' ezql_delete_data(
@@ -1202,14 +1481,14 @@ ezql_delete_data <- function(df,
                              database = NULL,
                              address = NULL,
                              rosetta = NULL,
-                             names_column = "names",
-                             type_function_column = "type_function"
+                             names_column_sql = "sql",
+                             type_function_column = "r_type"
                              ) {
   # Perform checks and get breakdown
   if(is.null(breakdown)) {
     breakdown <-
       ezql_check_table(df, table, schema = schema, database = database, address,
-                       rosetta, names_column, type_function_column)
+                       rosetta, names_column_sql, type_function_column)
   }
   schema <- breakdown$schema
   database <- breakdown$database
@@ -1266,7 +1545,7 @@ ezql_delete_data <- function(df,
 #'
 #' A wrapper function that combines adding, updating, and deleting rows in a SQL table
 #' based on a data frame. Allows for a comprehensive table update in one step, with
-#' optional data type transformations.
+#' optional data type transformations and column name mapping.
 #'
 #' @param df A data frame containing the new data for the SQL table.
 #' @param table A string specifying the name of the target SQL table.
@@ -1278,30 +1557,47 @@ ezql_delete_data <- function(df,
 #' retrieved from \code{ezql_details_add()}.
 #' @param delete_missing_rows Logical. If \code{TRUE}, rows in the SQL table but not
 #' in the data frame are deleted. Defaults to \code{FALSE}.
-#' @param rosetta A data frame (or tibble) used for column-level data type transformations.
-#' This should contain at least two columns: one for column names and one for the associated type transformation functions.
-#' Defaults to \code{NULL}, meaning no transformations will be applied.
-#' @param names_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the names of the columns to be transformed. Defaults to \code{"names"}.
+#' @param rosetta A data frame (or tibble) used for column-level data type transformations
+#' and column name mapping. This should contain at least two columns: one for column names
+#' in the data frame, and one for column names in the SQL table. Optionally, a column for
+#' type transformation functions can be included. Defaults to \code{NULL}, meaning no
+#' transformations or name mapping will be applied.
+#' @param names_column_r A string specifying the column in the \code{rosetta} data frame
+#' that contains the names of the columns in the data frame. Defaults to \code{"r"}.
+#' @param names_column_sql A string specifying the column in the \code{rosetta} data frame
+#' that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.
 #' @param type_function_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.
+#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.
 #'
-#' @return A list summarizing the number of rows added, updated, and deleted.
+#' @return A list summarizing the number of rows added, updated, and deleted:
+#' \itemize{
+#'   \item \code{added}: Number of rows added to the table.
+#'   \item \code{altered}: Number of rows updated in the table.
+#'   \item \code{deleted}: Number of rows deleted from the table, if \code{delete_missing_rows = TRUE}.
+#' }
 #'
 #' @details
 #' This function performs a full edit of the specified SQL table by:
-#' 1. Adding new rows present in the data frame but not in the SQL table.
-#' 2. Updating rows in the SQL table that differ from the corresponding rows in the data frame.
-#' 3. Optionally deleting rows in the SQL table that are not present in the data frame (if \code{delete_missing_rows = TRUE}).
+#' \enumerate{
+#'   \item Mapping column names in the data frame to match those in the SQL table
+#'         using the \code{rosetta} data frame, if provided.
+#'   \item Adding new rows present in the data frame but not in the SQL table.
+#'   \item Updating rows in the SQL table that differ from the corresponding rows in the data frame.
+#'   \item Optionally deleting rows in the SQL table that are not present in the data frame
+#'         (if \code{delete_missing_rows = TRUE}).
+#' }
 #'
 #' If \code{rosetta} is provided, the function applies the specified type transformations
-#' to the columns in the data frame before attempting any operations. Columns not listed
+#' and column name mappings before attempting any operations. Columns not listed
 #' in the \code{rosetta} will remain unchanged.
 #'
-#' The \code{rosetta} data frame must have one column (specified by \code{names_column})
-#' listing the column names in \code{df} to be transformed, and another column
-#' (specified by \code{type_function_column}) containing the names of functions
-#' to be applied for the transformations.
+#' The \code{rosetta} data frame must have:
+#' \itemize{
+#'   \item One column (specified by \code{names_column_r}) listing the column names in the data frame.
+#'   \item One column (specified by \code{names_column_sql}) listing the corresponding column names in the SQL table.
+#'   \item Optionally, one column (specified by \code{type_function_column}) containing the names of functions
+#'         to be applied for data type transformations.
+#' }
 #'
 #' @examples
 #' \dontrun{
@@ -1316,10 +1612,11 @@ ezql_delete_data <- function(df,
 #' )
 #' print(result)
 #'
-#' # Edit a table with type transformations using a rosetta data frame
+#' # Edit a table with column mapping and type transformations using a rosetta data frame
 #' rosetta <- tibble::tibble(
-#'   names = c("column1", "column2"),
-#'   type_function = c("as.character", "as.numeric")
+#'   r = c("local_column1", "local_column2"),
+#'   sql = c("db_column1", "db_column2"),
+#'   r_type = c("as.character", "as.numeric")
 #' )
 #'
 #' result <- ezql_edit(
@@ -1343,13 +1640,20 @@ ezql_edit <- function(df,
                       address = NULL,
                       delete_missing_rows = FALSE,
                       rosetta = NULL,
-                      names_column = "names",
-                      type_function_column = "type_function"
+                      names_column_r = "r",
+                      names_column_sql = "sql",
+                      type_function_column = "r_type"
                       ) {
   # Perform checks and get breakdown
+
+  if(!is.null(rosetta)){
+    df <- ezql_change_names(df, rosetta = rosetta, from = names_column_r,
+                            to = names_column_sql)
+  }
+
   breakdown <-
     ezql_check_table(df, table, schema = schema, database = database, address,
-                     rosetta, names_column, type_function_column)
+                     rosetta, names_column_sql, type_function_column)
 
   # Add new rows
   ezql_add_data(df, table, breakdown = breakdown)
@@ -1506,159 +1810,6 @@ ezql_primary_key_data <- function(table, schema = NULL, database = NULL, address
   return(tibble::as_tibble (pk_data))
 }
 
-
-#' Validate a Data Frame Against a SQL Table with Data Type Handling
-#'
-#' Checks the compatibility of a data frame with a specified SQL table by validating
-#' column names, primary keys, and identifying rows to add, update, or delete.
-#' Optionally applies data type transformations based on a "rosetta" data frame.
-#'
-#' @param df A data frame to validate against the SQL table.
-#' @param table A string specifying the name of the SQL table.
-#' @param schema A string specifying the schema of the table. Defaults to the value
-#' retrieved from \code{ezql_details_schema()}.
-#' @param database A string specifying the database name. Defaults to the value
-#' retrieved from \code{ezql_details_db()}.
-#' @param address A string specifying the server address. Defaults to the value
-#' retrieved from \code{ezql_details_add()}.
-#' @param rosetta A data frame (or tibble) used for column-level data type transformations.
-#' This should contain at least two columns: one for column names and one for the associated type transformation functions.
-#' Defaults to \code{NULL}, meaning no transformations will be applied.
-#' @param names_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the names of the columns to be transformed. Defaults to \code{"names"}.
-#' @param type_function_column A string specifying the column in the \code{rosetta} data frame
-#' that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.
-#'
-#' @return A tibble containing:
-#' \itemize{
-#'   \item \code{data_added}: Rows in \code{df} not present in the table.
-#'   \item \code{data_altered}: Rows in \code{df} with matching primary keys but different values.
-#'   \item \code{data_deleted}: Rows in the table not present in \code{df}.
-#'   \item \code{data_to_be_deleted}: Rows in both \code{df} and the table.
-#'   \item \code{schema}: The schema name.
-#'   \item \code{database}: The database name.
-#'   \item \code{address}: The server address.
-#' }
-#'
-#' @details
-#' This function ensures that the data frame and SQL table are compatible for operations
-#' like adding, updating, or deleting rows. It performs the following checks:
-#' \enumerate{
-#'   \item Confirms the SQL table exists on the server.
-#'   \item Ensures the table has a primary key.
-#'   \item Validates column names in \code{df} against the table structure.
-#'   \item Identifies duplicate primary key values in \code{df}.
-#'   \item Retrieves existing rows from the SQL table and identifies differences.
-#' }
-#'
-#' If \code{rosetta} is provided, the function applies type transformations to the server data
-#' before performing any comparisons. This ensures compatibility between the data frame and
-#' the SQL table when column types differ.
-#'
-#' The \code{rosetta} data frame must have one column (specified by \code{names_column})
-#' listing the column names in \code{df} to be transformed, and another column
-#' (specified by \code{type_function_column}) containing the names of functions
-#' to be applied for the transformations.
-#'
-#' @examples
-#' \dontrun{
-#' # Validate a data frame against a table
-#' breakdown <- ezql_check_table(
-#'   df = my_data,
-#'   table = "my_table",
-#'   schema = "dbo",
-#'   database = "my_database",
-#'   address = "my_server"
-#' )
-#' print(breakdown$data_added)
-#'
-#' # Validate with type transformations using a rosetta data frame
-#' rosetta <- tibble::tibble(
-#'   names = c("column1", "column2"),
-#'   type_function = c("as.character", "as.numeric")
-#' )
-#' breakdown <- ezql_check_table(
-#'   df = my_data,
-#'   table = "my_table",
-#'   schema = "dbo",
-#'   database = "my_database",
-#'   address = "my_server",
-#'   rosetta = rosetta
-#' )
-#' print(breakdown$data_added)
-#' }
-#'
-#' @seealso \code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}, \code{\link{ezql_set_data_types}}
-#' @export
-ezql_check_table <- function(df, table, schema = NULL, database = NULL, address = NULL,
-                             rosetta = NULL, names_column = "names",
-                             type_function_column = "type_function"
-                             ) {
-  # Resolve defaults
-  schema <- schema %||% ezql_details_schema()
-  database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
-
-  if (is.null(schema) || is.null(database) || is.null(address)) {
-    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
-  }
-
-  # Step 1: Confirm that the table exists
-  if (!ezql_table_exists(table, schema, database, address)) {
-    stop("This table does not exist on the SQL server.")
-  }
-
-  # Step 2: Retrieve primary key and confirm its presence
-  primary_key <- ezql_primary_key_name(table, schema, database, address)
-  if (is.null(primary_key)) {
-    stop("The table does not have a primary key.")
-  }
-
-  # Step 3: Retrieve server table column names and confirm column name matching
-  server_table_names <- ezql_table_names(table, schema, database, address)
-  if (!identical(sort(names(df)), sort(server_table_names))) {
-    stop("The dataframe provided and the table on the server have different column names.")
-  }
-
-  # Step 4: Check for duplicate primary keys in the dataframe
-  duplicate_keys <- df %>%
-    dplyr::group_by(across(all_of(primary_key))) %>%
-    dplyr::summarise(count = dplyr::n(), .groups = "drop") %>%
-    dplyr::filter(count > 1)
-
-  if (nrow(duplicate_keys) > 0) {
-    stop("The dataframe contains duplicate primary key values:\n",
-         paste(capture.output(print(duplicate_keys)), collapse = "\n"))
-  }
-
-  # Step 5: Retrieve existing data from the server
-  if(is.null(rosetta)){
-    server_data <- ezql_get(table, schema = schema, database = database, address = address)
-  } else {
-    server_data <- ezql_get(table, schema = schema, database = database, address = address) %>%
-      ezql_set_data_types(rosetta = rosetta,
-                          names_column = names_column,
-                          type_function_column = type_function_column)
-  }
-
-  # Step 6: Identify rows to add, alter, delete, and to be deleted
-  new_and_edited_rows <- dplyr::anti_join(df, server_data)
-  data_added <- dplyr::anti_join(new_and_edited_rows, server_data, by = primary_key)
-  data_altered <- dplyr::semi_join(new_and_edited_rows, server_data, by = primary_key)
-  data_deleted <- dplyr::anti_join(server_data, df, by = primary_key)
-  data_to_be_deleted <- dplyr::anti_join(server_data, df, by = primary_key)
-
-  # Return results
-  return(tibble::tibble(
-    data_added = list(data_added),
-    data_altered = list(data_altered),
-    data_deleted = list(data_deleted),
-    data_to_be_deleted = list(data_to_be_deleted),
-    schema = schema,
-    database = database,
-    address = address
-  ))
-}
 
 
 #' Drop a SQL Table

@@ -11,8 +11,8 @@ ezql_check_table(
   database = NULL,
   address = NULL,
   rosetta = NULL,
-  names_column = "names",
-  type_function_column = "type_function"
+  names_column_sql = "sql",
+  type_function_column = "r_type"
 )
 }
 \arguments{
@@ -33,11 +33,11 @@ retrieved from \code{ezql_details_add()}.}
 This should contain at least two columns: one for column names and one for the associated type transformation functions.
 Defaults to \code{NULL}, meaning no transformations will be applied.}
 
-\item{names_column}{A string specifying the column in the \code{rosetta} data frame
-that contains the names of the columns to be transformed. Defaults to \code{"names"}.}
+\item{names_column_sql}{A string specifying the column in the \code{rosetta} data frame
+that contains the names of the columns in the SQL table. Defaults to \code{"sql"}.}
 
 \item{type_function_column}{A string specifying the column in the \code{rosetta} data frame
-that contains the type transformation functions for the corresponding columns. Defaults to \code{"type_function"}.}
+that contains the type transformation functions for the corresponding columns. Defaults to \code{"r_type"}.}
 }
 \value{
 A tibble containing:
@@ -45,7 +45,7 @@ A tibble containing:
   \item \code{data_added}: Rows in \code{df} not present in the table.
   \item \code{data_altered}: Rows in \code{df} with matching primary keys but different values.
   \item \code{data_deleted}: Rows in the table not present in \code{df}.
-  \item \code{data_to_be_deleted}: Rows in both \code{df} and the table.
+  \item \code{data_to_be_deleted}: Duplicate of \code{data_deleted}, included for compatibility.
   \item \code{schema}: The schema name.
   \item \code{database}: The database name.
   \item \code{address}: The server address.
@@ -71,8 +71,8 @@ If \code{rosetta} is provided, the function applies type transformations to the 
 before performing any comparisons. This ensures compatibility between the data frame and
 the SQL table when column types differ.
 
-The \code{rosetta} data frame must have one column (specified by \code{names_column})
-listing the column names in \code{df} to be transformed, and another column
+The \code{rosetta} data frame must have one column (specified by \code{names_column_sql})
+listing the column names in the SQL table, and another column
 (specified by \code{type_function_column}) containing the names of functions
 to be applied for the transformations.
 }
@@ -90,8 +90,8 @@ print(breakdown$data_added)
 
 # Validate with type transformations using a rosetta data frame
 rosetta <- tibble::tibble(
-  names = c("column1", "column2"),
-  type_function = c("as.character", "as.numeric")
+  sql = c("column1", "column2"),
+  r_type = c("as.character", "as.numeric")
 )
 breakdown <- ezql_check_table(
   df = my_data,
