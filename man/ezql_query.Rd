@@ -9,13 +9,15 @@ ezql_query(queries, database = NULL, address = NULL)
 \arguments{
 \item{queries}{A character vector of SQL queries to execute.}
 
-\item{database}{A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.}
+\item{database}{A string specifying the database name. Defaults to `NULL` and uses `ezql_details_db()` if not provided.}
 
-\item{address}{A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.}
+\item{address}{A string specifying the SQL Server address. Defaults to `NULL` and uses `ezql_details_add()` if not provided.}
 }
 \value{
-A list containing the results of each query, or error messages if any query fails.
+A list of results for each query. Each element contains either:
+  - `list(success = TRUE, result = <data or success message>)`, or
+  - `list(success = FALSE, error = <error message>)`
 }
 \description{
-This function executes one or more SQL queries on a specified SQL server and returns the results or error messages.
+Executes one or more SQL queries on a specified SQL Server and returns results or errors.
 }

@@ -11,14 +11,6 @@ ezql_assign_primary_key(
   database = NULL,
   address = NULL
 )
-
-ezql_assign_primary_key(
-  table,
-  primary_key_column,
-  schema = NULL,
-  database = NULL,
-  address = NULL
-)
 }
 \arguments{
 \item{table}{A string specifying the name of the SQL table to modify.}
@@ -33,11 +25,7 @@ ezql_assign_primary_key(
 }
 \value{
 A list containing the result of the primary key assignment query, or a warning if the primary key already exists.
-
-A list containing the result of the primary key assignment query, or a warning if the primary key already exists.
 }
 \description{
-This function assigns a primary key to a specified SQL table if it doesn't already have one.
-
 This function assigns a primary key to a specified SQL table if it doesn't already have one.
 }

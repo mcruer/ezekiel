@@ -86,6 +86,7 @@ ezql_get <- function(table, schema = NULL, database = NULL, address = NULL,
   return(data)
 }
 
+
 #' Retrieve Data as of a Specific Date
 #'
 #' This function retrieves records from a specified table and its history,
@@ -199,6 +200,98 @@ ezql_get_as_of <- function(table, as_of, schema = NULL, database = NULL,
     dplyr::filter(ymd(as_of) >= ValidFrom,
                   ymd(as_of) <= ValidTo)
 }
+
+
+#' Retrieve and Prepare a SQL Table using Rosetta
+#'
+#' Fetches a SQL table and optionally filters to records valid as of a given date.
+#' Applies column renaming and type coercion using the `ezql_rosetta()` mapping.
+#'
+#' @param table Name of the SQL table to fetch.
+#' @param as_of Optional. A date to filter the records by `ValidFrom` and `ValidTo`.
+#' @param schema Optional. Schema name. Defaults to `ezql_details_schema()`.
+#' @param database Optional. Database name. Defaults to `ezql_details_db()`.
+#' @param address Optional. SQL server address. Defaults to `ezql_details_add()`.
+#' @param use_rosetta Logical. Whether to apply column renaming and typing using `ezql_rosetta()`. Defaults to `TRUE`.
+#' @param names_column Column in rosetta that matches SQL names. Defaults to "sql".
+#' @param rename_to Column in rosetta to rename columns to. Defaults to "r".
+#' @param type_function_column Column in rosetta with coercion functions. Defaults to "r_type".
+#'
+#' @return A tibble with optionally renamed and typed columns.
+#' @export
+ezql_table <- function(table,
+                       as_of = NULL,
+                       schema = NULL,
+                       database = NULL,
+                       address = NULL,
+                       use_rosetta = TRUE,
+                       names_column = "sql",
+                       rename_to = "r",
+                       type_function_column = "r_type") {
+
+  df <- if (is.null(as_of)) {
+    ezql_get(
+      table = table,
+      schema = schema,
+      database = database,
+      address = address
+    )
+  } else {
+    ezql_get_as_of(
+      table = table,
+      as_of = as_of,
+      schema = schema,
+      database = database,
+      address = address
+    )
+  }
+
+  if (!use_rosetta) return(df)
+
+  rosetta <- ezql_rosetta()
+
+  df %>%
+    ezql_change_names(rosetta, from = names_column, to = rename_to) %>%
+    ezql_set_data_types(rosetta, names_column = rename_to, type_function_column = type_function_column)
+}
+
+#' List Tables on the SQL Server
+#'
+#' Returns a tibble of table names available in the current schema, database, and address context.
+#'
+#' @param schema Optional. Schema name. Defaults to `ezql_details_schema()`.
+#' @param database Optional. Database name. Defaults to `ezql_details_db()`.
+#' @param address Optional. SQL server address. Defaults to `ezql_details_add()`.
+#'
+#' @return A tibble with columns: `TABLE_NAME`, `TABLE_TYPE`, and optionally others.
+#' @export
+ezql_list_tables <- function(schema = NULL,
+                             database = NULL,
+                             address = NULL) {
+  schema <- schema %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address <- address %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided either as arguments or via ezql_details_*.")
+  }
+
+  query <- glue::glue("
+    SELECT TABLE_NAME, TABLE_TYPE
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = '{schema}'
+    ORDER BY TABLE_NAME;
+  ")
+
+  result <- ezql_query(query, database = database, address = address)
+
+  if (!result[[1]]$success) {
+    stop("Failed to list tables: ", result[[1]]$error)
+  }
+
+  tibble::as_tibble(result[[1]]$result)
+}
+
 
 
 # This function modifies 'sqlwrite' function in RODBC package so that it can work with temporal tables
@@ -474,49 +567,56 @@ ezql_set_data_types <- function(df, rosetta, names_column = "names", type_functi
 
 #' Execute SQL Queries on a Server
 #'
-#' This function executes one or more SQL queries on a specified SQL server and returns the results or error messages.
+#' Executes one or more SQL queries on a specified SQL Server and returns results or errors.
 #'
 #' @param queries A character vector of SQL queries to execute.
-#' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
-#' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
-#' @return A list containing the results of each query, or error messages if any query fails.
+#' @param database A string specifying the database name. Defaults to `NULL` and uses `ezql_details_db()` if not provided.
+#' @param address A string specifying the SQL Server address. Defaults to `NULL` and uses `ezql_details_add()` if not provided.
+#'
+#' @return A list of results for each query. Each element contains either:
+#'   - `list(success = TRUE, result = <data or success message>)`, or
+#'   - `list(success = FALSE, error = <error message>)`
+#' @export
 #' @importFrom RODBC sqlQuery odbcClose
 #' @importFrom purrr map
-#' @export
 ezql_query <- function(queries,
                        database = NULL,
                        address = NULL) {
 
-  # Retrieve default values if not provided
+  # Resolve default connection parameters
   database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
+  address  <- address  %||% ezql_details_add()
 
   if (is.null(database) || is.null(address)) {
-    stop("Database, and address must be provided either as arguments or automatically through ezql_details.")
+    stop("Database and address must be provided (or defined via ezql_details_*).")
   }
 
-  # Establish the SQL connection
+  # Open SQL Server connection
   connection <- ezql_connect(database, address)
-
-  # Ensure connection is closed after all operations
   on.exit(RODBC::odbcClose(connection))
 
-  # Define a helper function to execute a single query and return the result or an error message
+  # Internal helper for a single query
   execute_query <- function(connection, query) {
     result <- RODBC::sqlQuery(connection, query)
+
+    # Case 1: Connection-level failure
     if (inherits(result, "try-error")) {
       return(list(success = FALSE, error = result))
-    } else {
-      return(list(success = TRUE, result = result))
     }
+
+    # Case 2: SQL-level failure (RODBC returns character vector)
+    if (is.character(result) && any(grepl("ERROR", result, ignore.case = TRUE))) {
+      return(list(success = FALSE, error = result))
+    }
+
+    # Case 3: Success
+    return(list(success = TRUE, result = result))
   }
 
-  # Run each query sequentially and collect results using purrr::map
+  # Apply to each query
   results <- purrr::map(queries, execute_query, connection = connection)
-
-  return(results)  # Return the list of results
+  return(results)
 }
-
 
 
 
@@ -686,82 +786,6 @@ ezql_table_exists <- function(table, schema = NULL, database = NULL, address = N
 
   return(result[[1]]$result$TableCount > 0)
 }
-
-#' Assign Primary Key to a SQL Table if None Exists
-#'
-#' This function assigns a primary key to a specified SQL table if it doesn't already have one.
-#'
-#' @param table A string specifying the name of the SQL table to modify.
-#' @param primary_key_column A string specifying the name of the column to set as the primary key.
-#' @param schema A string specifying the schema. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.
-#' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
-#' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
-#' @return A list containing the result of the primary key assignment query, or a warning if the primary key already exists.
-#' @importFrom stringr str_c
-#' @importFrom RODBC sqlQuery odbcClose
-#' @export
-ezql_assign_primary_key <- function(table,
-                                    primary_key_column,
-                                    schema = NULL,
-                                    database = NULL,
-                                    address = NULL) {
-
-  # Retrieve default values if not provided
-  schema <- schema %||% ezql_details_schema()
-  database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
-
-  if (is.null (schema) || is.null(database) || is.null(address)) {
-    stop("Shema, database, and address must be provided either as arguments or automatically through ezql_details.")
-  }
-
-  # Construct full table name
-  full_table_name <- ezql_full_table_name(schema, table)
-
-  # Query to check if primary key already exists
-  check_pk_query <- stringr::str_c(
-    "SELECT COUNT(*) AS pk_exists FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS ",
-    "WHERE TABLE_SCHEMA = '", schema, "' AND TABLE_NAME = '", table, "' ",
-    "AND CONSTRAINT_TYPE = 'PRIMARY KEY';"
-  )
-
-  # Execute the query to check for an existing primary key
-  pk_check_result <- ezql_query(check_pk_query, database, address)
-
-  # Check the result of the primary key check query
-  if (!pk_check_result[[1]]$success) {
-    stop("Failed to check for existing primary key: ", pk_check_result[[1]]$error)
-  }
-
-  # If no primary key exists, add one; otherwise, give a warning
-  if (pk_check_result[[1]]$result$pk_exists == 0) {
-    # Create the query to add the primary key
-    primary_key_query <- stringr::str_c(
-      'ALTER TABLE ', full_table_name,
-      ' ADD CONSTRAINT PK_', table,
-      ' PRIMARY KEY (', primary_key_column, ');'
-    )
-
-    # Execute the query to add the primary key
-    pk_add_result <- ezql_query(primary_key_query, database, address)
-
-    # Check the result of the primary key addition query
-    if (!pk_add_result[[1]]$success) {
-      stop("Failed to add primary key: ", pk_add_result[[1]]$error)
-    } else {
-      return(pk_add_result[[1]]$result)  # Return the result of the successful query
-    }
-  } else {
-    warning(
-      sprintf(
-        "Primary key already exists for table '%s.%s'. No primary key was added.",
-        schema, table
-      )
-    )
-    return(pk_check_result[[1]]$result)  # Return the result indicating the primary key exists
-  }
-}
-
 
 #' Internal Function to Create a New Table in the Database
 #'
@@ -1872,5 +1896,3 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
     return(invisible(NULL))
   }
 }
-
-

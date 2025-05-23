@@ -1,6 +1,10 @@
 # Internal utility function for NULL coalescing
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
+utils::globalVariables(c(
+  "ValidFrom", "ValidTo", "current", "typesR2DBMS", "odbcGetInfo",
+  "capture.output", "r"
+))
 
 custom_sqlSave <-
   function (channel, dat, tablename = NULL, append = FALSE, rownames = TRUE,
@@ -228,3 +232,6 @@ custom_sqlwrite <- function (channel, tablename, mydata, test = FALSE, fast = TR
   }
   return(invisible(1L))
 }
+
+
+
