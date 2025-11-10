@@ -123,4 +123,84 @@ ezql_set_details <- function(schema = NULL, database = NULL, address = NULL) {
   print(ezql_details())
 }
 
+#' Add Logging Path to .Rprofile
+#'
+#' This function writes the logging file path to the user's .Rprofile file,
+#' enabling persistent logging configuration across R sessions.
+#' It will *not* overwrite an existing path unless explicitly allowed.
+#'
+#' @param log_path A string specifying the full path to the log file.
+#' @param overwrite Logical; whether to overwrite an existing log path entry in
+#'   the .Rprofile file. Defaults to `FALSE`.
+#'
+#' @importFrom stringr str_subset str_c
+#' @importFrom readr write_lines read_lines
+#' @export
+ezql_log_path_to_rprofile <- function(log_path, overwrite = FALSE) {
+  # Construct the path to .Rprofile
+  rprofile_path <- path.expand("~") %>% file.path(".Rprofile")
+
+  # Text to add to .Rprofile
+  text_to_add <- stringr::str_c("options(ezql.log_path = '", log_path, "')")
+
+  # Check if .Rprofile exists
+  file_exists <- file.exists(rprofile_path)
+
+  tryCatch({
+    if (!file_exists) {
+      # Create .Rprofile if it doesn't exist
+      readr::write_lines(text_to_add, file = rprofile_path)
+    } else {
+      current_lines <- readr::read_lines(rprofile_path)
+      existing_line <- stringr::str_subset(current_lines, "ezql\\.log_path")
+
+      if (length(existing_line) > 0 && !overwrite) {
+        stop(
+          "An existing ezql.log_path entry was found in .Rprofile.\n",
+          "To replace it, re-run with overwrite = TRUE."
+        )
+      }
+
+      updated_lines <- c(
+        current_lines %>% stringr::str_subset("ezql\\.log_path", negate = TRUE),
+        text_to_add
+      )
+      readr::write_lines(updated_lines, file = rprofile_path)
+    }
+
+    warning(
+      "Logging path saved to .Rprofile. Restart your R session (Ctrl+Shift+F10) to apply."
+    )
+  }, error = function(e) {
+    stop("Failed to update .Rprofile: ", e$message)
+  })
+}
+
+
+#' Retrieve the Configured Logging Path
+#'
+#' This function retrieves the current logging path set in R options.
+#' If no logging path has been defined (e.g., via \code{ezql_log_path_to_rprofile()}),
+#' it returns \code{NULL} and optionally warns the user.
+#'
+#' @param warn Logical; whether to issue a warning if the logging path is not set.
+#'   Defaults to \code{TRUE}.
+#'
+#' @return A character string containing the logging path, or \code{NULL} if none exists.
+#'
+#' @examples
+#' \dontrun{
+#' ezql_log_path()
+#' }
+#'
+#' @export
+ezql_log_path <- function(warn = TRUE) {
+  path <- getOption("ezql.log_path", default = NULL)
+
+  if (is.null(path) && warn) {
+    warning("No logging path is currently set. Use ezql_log_path_to_rprofile() to configure one.")
+  }
+
+  return(path)
+}
 
