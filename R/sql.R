@@ -2077,9 +2077,22 @@ ezql_fix <- function(
   readr::write_rds(df,         fs::path(new_fix_folder, "target_new_input.rds"))
 
   # ---- 11. Merge: fill new from old, keep final row --------------------------
-  target_new <- dplyr::bind_rows(target_old, df) %>%
-    tidyr::fill(dplyr::everything(), .direction = "down") %>%
-    dplyr::slice_tail(n = 1)
+  invalid_cols <- setdiff(names(df), names(target_old))
+  if (length(invalid_cols) > 0) {
+    stop("`df` contains columns not found in the target table: ",
+         paste(invalid_cols, collapse = ", "))
+  }
+
+  # Take the first (and only) row of target_old
+  target_new <- target_old
+
+  # Overwrite with any values supplied in df, including NA
+  cols_to_patch <- names(df)
+  target_new[cols_to_patch] <- df[cols_to_patch]
+
+  # target_new <- dplyr::bind_rows(target_old, df) %>%
+  #   tidyr::fill(dplyr::everything(), .direction = "down") %>%
+  #   dplyr::slice_tail(n = 1)
 
   readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
 
