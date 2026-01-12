@@ -1896,3 +1896,235 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
     return(invisible(NULL))
   }
 }
+
+
+
+#' Apply a Targeted Data Fix and Log the Change
+#'
+#' This function performs a controlled update of a single record in a SQL table.
+#' It:
+#' - Retrieves the existing record from the server
+#' - Logs the old and new values, supporting files, user identity, and update note locally
+#' - Applies the corrected record via \code{ezql_edit()}
+#'
+#' Each fix is stored in its own timestamped subfolder under
+#' \code{file.path(ezql_log_path(), table)}, along with a central
+#' \code{fix_log.txt} that records the user, timestamp, key, and note for each change.
+#'
+#' @param df A one-row tibble containing the corrected data (R-side column names).
+#' @param table The target SQL table name.
+#' @param update_note A text note describing the reason or context for the fix.
+#' @param user The name or identifier of the individual performing the fix.
+#'   Recorded in the central \code{fix_log.txt} for traceability.
+#' @param file_paths Optional character vector of file or folder paths to include in the log.
+#'   Defaults to \code{NULL}. Missing files trigger an error.
+#' @param rosetta A rosetta mapping tibble linking R and SQL column names.
+#'   Defaults to \code{ezql_rosetta()}.
+#' @param schema,database,address Optional SQL connection details;
+#'   defaults to values from \code{ezql_details_*()}.
+#'
+#' @details
+#' Primary key values are converted to character type using \code{gplyr::to_character()}
+#' before being concatenated into a single audit key string. This ensures consistent
+#' behavior across numeric and character PK types when building folder names and log entries.
+#'
+#' @return Invisibly returns the result of the \code{ezql_edit()} operation.
+#'
+#' @importFrom dplyr select all_of bind_rows slice_tail across everything filter
+#' @importFrom tidyr fill unite
+#' @importFrom stringr str_c str_replace_all
+#' @importFrom readr write_lines write_rds
+#' @importFrom fs dir_create file_copy dir_copy is_file is_dir path file_exists path_file
+#' @importFrom lubridate now
+#' @importFrom purrr walk flatten_chr
+#' @importFrom gplyr to_character
+#' @export
+ezql_fix <- function(
+    df,
+    table,
+    update_note,
+    user,
+    file_paths = NULL,
+    rosetta = ezql_rosetta(),
+    schema = NULL,
+    database = NULL,
+    address = NULL
+    #testing = TRUE
+) {
+  testing <- FALSE
+  # ---- 1. Validate supplied files / folders ----------------------------------
+  if (!is.null(file_paths) && length(file_paths) > 0) {
+    missing_paths <- file_paths[!fs::file_exists(file_paths)]
+    if (length(missing_paths) > 0) {
+      stop(
+        "The following file(s) or folder(s) do not exist:\n",
+        paste(missing_paths, collapse = "\n")
+      )
+    }
+  }
+
+  # ---- 2. Resolve connection details -----------------------------------------
+  schema   <- schema   %||% ezql_details_schema()
+  database <- database %||% ezql_details_db()
+  address  <- address  %||% ezql_details_add()
+
+  if (is.null(schema) || is.null(database) || is.null(address)) {
+    stop("Schema, database, and address must be provided (or set via ezql_details_*()).")
+  }
+
+  # ---- 3. Primary key: SQL → R name mapping via rosetta ----------------------
+  pk_sql <- ezql_primary_key_name(
+    table   = table,
+    schema  = schema,
+    database = database,
+    address  = address
+  )
+
+  if (length(pk_sql) == 0) {
+    stop("No primary key found for table '", table, "'.")
+  }
+
+  if (!all(pk_sql %in% rosetta$sql))
+    stop("Some SQL PK(s) not found in rosetta: ",
+         paste(setdiff(pk_sql, rosetta$sql), collapse = ", "))
+
+  pk_r <- rosetta %>%
+    dplyr::filter(sql %in% pk_sql) %>%
+    dplyr::pull(r)
+
+  if (length(pk_r) != length(pk_sql)) {
+    stop(
+      "Primary key mapping incomplete: not all SQL PK columns are present in rosetta.\n",
+      "SQL PK(s): ", paste(pk_sql, collapse = ", ")
+    )
+  }
+
+  # ---- 4. Validate df structure ----------------------------------------------
+  if (!all(pk_r %in% names(df))) {
+    stop(
+      "The primary key column(s) must be present in `df` using R-side names: ",
+      paste(pk_r, collapse = ", ")
+    )
+  }
+
+  if (nrow(df) > 1) stop("This function can only take one row of data at a time.")
+  if (nrow(df) == 0) stop("The dataframe provided contains 0 rows.")
+
+  # ---- 5. Retrieve target_old (R-side columns via ezql_table) ----------------
+  target_old <- ezql_table(
+    table   = table,
+    schema  = schema,
+    database = database,
+    address  = address,
+    use_rosetta = TRUE
+  ) %>%
+    dplyr::filter(
+      dplyr::across(
+        dplyr::all_of(pk_r),
+        ~ .x == df[[dplyr::cur_column()]]
+      )
+    )
+
+  if (nrow(target_old) == 0) {
+    stop("No matching record found in target table for the given primary key.")
+  }
+  if (nrow(target_old) > 1) {
+    stop("Multiple rows found for this primary key; fix aborted.")
+  }
+
+  # ---- 6. Build key string (collapsed PK values, R-side) ---------------------
+  key <- df %>%
+    dplyr::select(dplyr::all_of(pk_r)) %>%
+    gplyr::to_character() %>%
+    tidyr::unite(col = ".pk", dplyr::everything(), sep = "-", remove = FALSE) %>%
+    dplyr::pull(".pk")
+
+  # ---- 7. Create log folders (table-level + fix-level) -----------------------
+  timestamp <- format(lubridate::now(), "%Y-%m-%d %H_%M_%S")
+
+  safe_folder_name <- stringr::str_replace_all(
+    stringr::str_c(key, " - ", timestamp),
+    "[:/\\\\*?\"<>|]", "_"
+  )
+
+  table_folder <- fs::path(ezql_log_path(), table)
+  fs::dir_create(table_folder, recurse = TRUE)
+
+  new_fix_folder <- fs::path(table_folder, safe_folder_name)
+  fs::dir_create(new_fix_folder)
+
+  # ---- 8. Write update note --------------------------------------------------
+  note_path <- fs::path(new_fix_folder, "update_note.txt")
+  readr::write_lines(update_note, note_path)
+
+  # ---- 9. Copy supporting files / folders -----------------------------------
+  if (!is.null(file_paths) && length(file_paths) > 0) {
+    purrr::walk(file_paths, function(p) {
+      if (fs::is_file(p)) {
+        fs::file_copy(p, new_fix_folder, overwrite = TRUE)
+      } else if (fs::is_dir(p)) {
+        fs::dir_copy(
+          p,
+          fs::path(new_fix_folder, fs::path_file(p)),
+          overwrite = TRUE
+        )
+      }
+    })
+  }
+
+  # ---- 10. Save target_old and df (input) for audit --------------------------
+  readr::write_rds(target_old, fs::path(new_fix_folder, "target_old.rds"))
+  readr::write_rds(df,         fs::path(new_fix_folder, "target_new_input.rds"))
+
+  # ---- 11. Merge: fill new from old, keep final row --------------------------
+  invalid_cols <- setdiff(names(df), names(target_old))
+  if (length(invalid_cols) > 0) {
+    stop("`df` contains columns not found in the target table: ",
+         paste(invalid_cols, collapse = ", "))
+  }
+
+  # Take the first (and only) row of target_old
+  target_new <- target_old
+
+  # Overwrite with any values supplied in df, including NA
+  cols_to_patch <- names(df)
+  target_new[cols_to_patch] <- df[cols_to_patch]
+
+  # target_new <- dplyr::bind_rows(target_old, df) %>%
+  #   tidyr::fill(dplyr::everything(), .direction = "down") %>%
+  #   dplyr::slice_tail(n = 1)
+
+  readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
+
+  # ---- 12. Push update via ezql_edit -----------------------------------------
+  if(!testing){
+    result <- ezql_edit(
+      df       = target_new,
+      table    = table,
+      schema   = schema,
+      database = database,
+      address  = address,
+      rosetta  = rosetta
+    )} else {
+      message("Testing mode: database not updated.")
+      result <- target_new
+    }
+
+  # ---- 13. Append to table-level fix_log.txt (note only) ---------------------
+  log_entry <- stringr::str_c(
+    format(lubridate::now(), "%Y-%m-%d %H:%M:%S"),
+    " | user: ", user,
+    " | key: ", key,
+    " | note: ", update_note
+  )
+
+  readr::write_lines(
+    log_entry,
+    fs::path(table_folder, "fix_log.txt"),
+    append = TRUE
+  )
+
+  invisible(result)
+}
+
+
