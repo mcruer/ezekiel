@@ -1936,7 +1936,7 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
 #' @importFrom readr write_lines write_rds
 #' @importFrom fs dir_create file_copy dir_copy is_file is_dir path file_exists path_file
 #' @importFrom lubridate now
-#' @importFrom purrr walk flatten_chr
+#' @importFrom purrr walk flatten_chr map
 #' @importFrom gplyr to_character
 #' @export
 ezql_fix <- function(
@@ -2019,7 +2019,7 @@ ezql_fix <- function(
     use_rosetta = TRUE
   ) %>%
     dplyr::filter(
-      Reduce(`&`, lapply(pk_r, function(col) .data[[col]] == df[[col]]))
+      Reduce(`&`, purrr::map(pk_r, ~ .data[[.x]] == df[[.x]]))
     )
 
   if (nrow(target_old) == 0) {
