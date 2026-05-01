@@ -1930,13 +1930,13 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
 #'
 #' @return Invisibly returns the result of the \code{ezql_edit()} operation.
 #'
-#' @importFrom dplyr select all_of bind_rows slice_tail if_all everything filter
+#' @importFrom dplyr select all_of bind_rows slice_tail everything filter
 #' @importFrom tidyr fill unite
 #' @importFrom stringr str_c str_replace_all
 #' @importFrom readr write_lines write_rds
 #' @importFrom fs dir_create file_copy dir_copy is_file is_dir path file_exists path_file
 #' @importFrom lubridate now
-#' @importFrom purrr walk flatten_chr
+#' @importFrom purrr walk flatten_chr map
 #' @importFrom gplyr to_character
 #' @export
 ezql_fix <- function(
@@ -2019,10 +2019,7 @@ ezql_fix <- function(
     use_rosetta = TRUE
   ) %>%
     dplyr::filter(
-      dplyr::if_all(
-        dplyr::all_of(pk_r),
-        ~ .x == df[[dplyr::cur_column()]]
-      )
+      Reduce(`&`, purrr::map(pk_r, ~ .data[[.x]] == df[[.x]]))
     )
 
   if (nrow(target_old) == 0) {
