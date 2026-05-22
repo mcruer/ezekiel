@@ -2181,7 +2181,6 @@ ezql_fix <- function(
         },
         error = function(e) stop("Failed to delete row: ", e$message)
       )
-      RODBC::odbcClose(connection)
       result <- invisible(NULL)
 
     } else {
