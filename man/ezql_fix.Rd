@@ -18,7 +18,8 @@ ezql_fix(
 )
 }
 \arguments{
-\item{df}{A one-row tibble containing the corrected data (R-side column names).}
+\item{df}{A one-row tibble containing the corrected data (R-side column names).
+Mutually exclusive with \code{delete}.}
 
 \item{table}{The target SQL table name.}
 
@@ -26,6 +27,10 @@ ezql_fix(
 
 \item{user}{The name or identifier of the individual performing the fix.
 Recorded in the central \code{fix_log.txt} for traceability.}
+
+\item{delete}{A one-row tibble containing only the primary key column(s) (R-side names)
+of the row to delete. Mutually exclusive with \code{df}. The full row is saved to
+\code{target_old.rds} before deletion for audit purposes.}
 
 \item{file_paths}{Optional character vector of file or folder paths to include in the log.
 Defaults to \code{NULL}. Missing files trigger an error.}
