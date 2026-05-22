@@ -1941,10 +1941,11 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
 #' @importFrom gplyr to_character
 #' @export
 ezql_fix <- function(
-    df,
+    df = NULL,
     table,
     update_note,
     user,
+    delete = NULL,
     file_paths = NULL,
     rosetta = ezql_rosetta(),
     schema = NULL,
@@ -1953,6 +1954,13 @@ ezql_fix <- function(
     #testing = TRUE
 ) {
   testing <- FALSE
+
+  # ---- 0. Validate exactly one of df / delete is supplied --------------------
+  if (is.null(df) && is.null(delete))
+    stop("Either `df` or `delete` must be provided.")
+  if (!is.null(df) && !is.null(delete))
+    stop("Only one of `df` or `delete` may be provided, not both.")
+
   # ---- 1. Validate supplied files / folders ----------------------------------
   if (!is.null(file_paths) && length(file_paths) > 0) {
     missing_paths <- file_paths[!fs::file_exists(file_paths)]
@@ -2000,16 +2008,41 @@ ezql_fix <- function(
     )
   }
 
-  # ---- 4. Validate df structure ----------------------------------------------
-  if (!all(pk_r %in% names(df))) {
-    stop(
-      "The primary key column(s) must be present in `df` using R-side names: ",
-      paste(pk_r, collapse = ", ")
-    )
-  }
+  # ---- 4. Validate df / delete structure -------------------------------------
+  if (!is.null(delete)) {
 
-  if (nrow(df) > 1) stop("This function can only take one row of data at a time.")
-  if (nrow(df) == 0) stop("The dataframe provided contains 0 rows.")
+    if (!all(pk_r %in% names(delete)))
+      stop(
+        "`delete` must contain the primary key column(s) using R-side names: ",
+        paste(pk_r, collapse = ", ")
+      )
+
+    extra_cols <- setdiff(names(delete), pk_r)
+    if (length(extra_cols) > 0)
+      stop(
+        "`delete` must contain only primary key column(s). Unexpected column(s): ",
+        paste(extra_cols, collapse = ", ")
+      )
+
+    if (nrow(delete) > 1) stop("`delete` can only contain one row.")
+    if (nrow(delete) == 0) stop("`delete` contains 0 rows.")
+
+    pk_source <- delete
+
+  } else {
+
+    if (!all(pk_r %in% names(df)))
+      stop(
+        "The primary key column(s) must be present in `df` using R-side names: ",
+        paste(pk_r, collapse = ", ")
+      )
+
+    if (nrow(df) > 1) stop("This function can only take one row of data at a time.")
+    if (nrow(df) == 0) stop("The dataframe provided contains 0 rows.")
+
+    pk_source <- df
+
+  }
 
   # ---- 5. Retrieve target_old (R-side columns via ezql_table) ----------------
   target_old <- ezql_table(
@@ -2020,7 +2053,7 @@ ezql_fix <- function(
     use_rosetta = TRUE
   ) %>%
     dplyr::filter(
-      !!!purrr::map(pk_r, ~ rlang::expr(.data[[!!.x]] == !!df[[.x]]))
+      !!!purrr::map(pk_r, ~ rlang::expr(.data[[!!.x]] == !!pk_source[[.x]]))
     )
 
   if (nrow(target_old) == 0) {
@@ -2031,7 +2064,7 @@ ezql_fix <- function(
   }
 
   # ---- 6. Build key string (collapsed PK values, R-side) ---------------------
-  key <- df %>%
+  key <- pk_source %>%
     dplyr::select(dplyr::all_of(pk_r)) %>%
     gplyr::to_character() %>%
     tidyr::unite(col = ".pk", dplyr::everything(), sep = "-", remove = FALSE) %>%
@@ -2070,48 +2103,108 @@ ezql_fix <- function(
     })
   }
 
-  # ---- 10. Save target_old and df (input) for audit --------------------------
+  # ---- 10. Save audit artifacts ----------------------------------------------
   readr::write_rds(target_old, fs::path(new_fix_folder, "target_old.rds"))
-  readr::write_rds(df,         fs::path(new_fix_folder, "target_new_input.rds"))
 
-  # ---- 11. Merge: fill new from old, keep final row --------------------------
-  invalid_cols <- setdiff(names(df), names(target_old))
-  if (length(invalid_cols) > 0) {
-    stop("`df` contains columns not found in the target table: ",
-         paste(invalid_cols, collapse = ", "))
-  }
+  if (!is.null(delete)) {
 
-  # Take the first (and only) row of target_old
-  target_new <- target_old
+    readr::write_rds(delete, fs::path(new_fix_folder, "delete_input.rds"))
 
-  # Overwrite with any values supplied in df, including NA
-  cols_to_patch <- names(df)
-  target_new[cols_to_patch] <- df[cols_to_patch]
+  } else {
 
-  # target_new <- dplyr::bind_rows(target_old, df) %>%
-  #   tidyr::fill(dplyr::everything(), .direction = "down") %>%
-  #   dplyr::slice_tail(n = 1)
+    readr::write_rds(df, fs::path(new_fix_folder, "target_new_input.rds"))
 
-  readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
-
-  # ---- 12. Push update via ezql_edit -----------------------------------------
-  if(!testing){
-    result <- ezql_edit(
-      df       = target_new,
-      table    = table,
-      schema   = schema,
-      database = database,
-      address  = address,
-      rosetta  = rosetta
-    )} else {
-      message("Testing mode: database not updated.")
-      result <- target_new
+    # ---- 11. Merge: fill new from old, keep final row ------------------------
+    invalid_cols <- setdiff(names(df), names(target_old))
+    if (length(invalid_cols) > 0) {
+      stop("`df` contains columns not found in the target table: ",
+           paste(invalid_cols, collapse = ", "))
     }
 
-  # ---- 13. Append to table-level fix_log.txt (note only) ---------------------
+    # Take the first (and only) row of target_old
+    target_new <- target_old
+
+    # Overwrite with any values supplied in df, including NA
+    cols_to_patch <- names(df)
+    target_new[cols_to_patch] <- df[cols_to_patch]
+
+    # target_new <- dplyr::bind_rows(target_old, df) %>%
+    #   tidyr::fill(dplyr::everything(), .direction = "down") %>%
+    #   dplyr::slice_tail(n = 1)
+
+    readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
+
+  }
+
+  # ---- 12. Execute database operation ----------------------------------------
+  if (!testing) {
+
+    if (!is.null(delete)) {
+
+      pk_values <- pk_source %>% dplyr::pull(dplyr::all_of(pk_r[[1]]))
+      pk_sql_col <- pk_sql[[1]]
+
+      if (is.numeric(pk_values)) {
+        where_clause <- stringr::str_c(pk_sql_col, " = ", pk_values)
+      } else {
+        where_clause <- stringr::str_c(pk_sql_col, " = '", pk_values, "'")
+      }
+
+      if (length(pk_sql) > 1) {
+        extra_conditions <- purrr::map2_chr(pk_sql[-1], pk_r[-1], function(sql_col, r_col) {
+          val <- pk_source %>% dplyr::pull(dplyr::all_of(r_col))
+          if (is.numeric(val)) {
+            stringr::str_c(sql_col, " = ", val)
+          } else {
+            stringr::str_c(sql_col, " = '", val, "'")
+          }
+        })
+        where_clause <- stringr::str_c(c(where_clause, extra_conditions), collapse = " AND ")
+      }
+
+      delete_query <- stringr::str_c(
+        "DELETE FROM ", schema, ".", table, " WHERE ", where_clause
+      )
+
+      connection <- ezql_connect(database, address)
+      on.exit(RODBC::odbcClose(connection))
+      tryCatch(
+        {
+          res <- RODBC::sqlQuery(connection, delete_query)
+          if (!is.null(attr(res, "error")))
+            stop("Error executing query: ", attr(res, "error"))
+          message("Row successfully deleted from '", table, "'.")
+        },
+        error = function(e) stop("Failed to delete row: ", e$message)
+      )
+      RODBC::odbcClose(connection)
+      result <- invisible(NULL)
+
+    } else {
+
+      result <- ezql_edit(
+        df       = target_new,
+        table    = table,
+        schema   = schema,
+        database = database,
+        address  = address,
+        rosetta  = rosetta
+      )
+
+    }
+
+  } else {
+    message("Testing mode: database not updated.")
+    result <- if (!is.null(delete)) invisible(NULL) else target_new
+  }
+
+  # ---- 13. Append to table-level fix_log.txt ---------------------------------
+  action <- if (!is.null(delete)) "delete" else "update"
+
   log_entry <- stringr::str_c(
     format(lubridate::now(), "%Y-%m-%d %H:%M:%S"),
     " | user: ", user,
+    " | action: ", action,
     " | key: ", key,
     " | note: ", update_note
   )
