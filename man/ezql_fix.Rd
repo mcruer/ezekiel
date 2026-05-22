@@ -5,10 +5,11 @@
 \title{Apply a Targeted Data Fix and Log the Change}
 \usage{
 ezql_fix(
-  df,
+  df = NULL,
   table,
   update_note,
   user,
+  delete = NULL,
   file_paths = NULL,
   rosetta = ezql_rosetta(),
   schema = NULL,
