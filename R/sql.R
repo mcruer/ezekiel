@@ -532,6 +532,8 @@ ezql_set_data_types <- function(df, rosetta, names_column = "names", type_functi
   }
 
   if(!all(names(df) %in% rosetta_column_names)){
+    missing_cols <- tibble::tibble(column = setdiff(names(df), rosetta_column_names))
+    print(missing_cols)
     warning("Not all variables in df are listed in the rosetta. These variables will remain unchanged.")
   }
 
@@ -832,8 +834,10 @@ ezql_new_internal <- function(df,
     stop(stringr::str_c("The rosetta contains duplicate values in the ", rosetta_names_col, " column."))
   }
 
-  if(!all (names(df) %in% rosetta_names)){
-    stop("Every column in df must be included in rosetta.")
+  if(!all(names(df) %in% rosetta_names)){
+    missing_cols <- tibble::tibble(column = setdiff(names(df), rosetta_names))
+    print(missing_cols)
+    stop("Every column in df must be included in rosetta. Missing columns printed above.")
   }
 
   rosetta_sql_types <- rosetta [[rosetta_sql_types_col]]
