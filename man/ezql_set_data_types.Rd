@@ -7,8 +7,8 @@
 ezql_set_data_types(
   df,
   rosetta,
-  names_column = "names",
-  type_function_column = "type_function"
+  names_column = "sql",
+  type_function_column = "r_type"
 )
 }
 \arguments{

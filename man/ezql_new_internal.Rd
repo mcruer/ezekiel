@@ -8,7 +8,7 @@ ezql_new_internal(
   df,
   table,
   rosetta,
-  rosetta_names_col = "sql_name",
+  rosetta_names_col = "sql",
   rosetta_sql_types_col = "sql_type",
   schema = NULL,
   database = NULL,

@@ -4,7 +4,7 @@
 \alias{ezql_change_names}
 \title{Change Data Frame Column Names Using a Rosetta Stone}
 \usage{
-ezql_change_names(df, rosetta, from = "from", to = "to")
+ezql_change_names(df, rosetta, from = "r", to = "sql")
 }
 \arguments{
 \item{df}{A data frame whose column names need to be changed.}

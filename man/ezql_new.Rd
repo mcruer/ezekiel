@@ -7,8 +7,8 @@
 ezql_new(
   df,
   table,
-  rosetta,
-  rosetta_names_col = "sql_name",
+  rosetta = ezql_rosetta(),
+  rosetta_names_col = "sql",
   rosetta_sql_types_col = "sql_type",
   primary_key = NULL,
   schema = NULL,

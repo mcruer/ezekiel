@@ -10,7 +10,7 @@ ezql_check_table(
   schema = NULL,
   database = NULL,
   address = NULL,
-  rosetta = NULL,
+  rosetta = ezql_rosetta(),
   names_column_sql = "sql",
   type_function_column = "r_type"
 )
