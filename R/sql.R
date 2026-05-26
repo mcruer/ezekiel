@@ -813,20 +813,12 @@ ezql_table_exists <- function(table, schema = NULL, database = NULL, address = N
 ezql_new_internal <- function(df,
                               table,
                               rosetta,
-                              rosetta_names_col = "sql_name",
+                              rosetta_names_col = "sql",
                               rosetta_sql_types_col = "sql_type",
                               schema = NULL,
                               database = NULL,
                               address = NULL,
                               primary_key = NULL) {
-
-  schema <- schema %||% ezql_details_schema()
-  database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
-
-  if (is.null(schema) || is.null(database) || is.null(address)) {
-    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
-  }
 
   rosetta_names <- rosetta[[rosetta_names_col]]
 
@@ -840,12 +832,11 @@ ezql_new_internal <- function(df,
     stop("Every column in df must be included in rosetta. Missing columns printed above.")
   }
 
-  rosetta_sql_types <- rosetta [[rosetta_sql_types_col]]
+  rosetta_sql_types <- rosetta[[rosetta_sql_types_col]]
   names(rosetta_sql_types) <- rosetta[[rosetta_names_col]]
+  rosetta_sql_types <- rosetta_sql_types[names(df)]
 
   full_table_name <- ezql_full_table_name(schema, table)
-
-  print(full_table_name)
 
   # Connect to server
   connection <- ezql_connect(database, address)
@@ -884,7 +875,7 @@ ezql_new_internal <- function(df,
 ezql_new <- function(df,
                      table,
                      rosetta,
-                     rosetta_names_col = "sql_name",
+                     rosetta_names_col = "sql",
                      rosetta_sql_types_col = "sql_type",
                      primary_key = NULL,
                      schema = NULL,
@@ -929,7 +920,7 @@ ezql_new <- function(df,
 ezql_replace <- function(df,
                          table,
                          rosetta,
-                         rosetta_names_col = "sql_name",
+                         rosetta_names_col = "sql",
                          rosetta_sql_types_col = "sql_type",
                          primary_key = NULL,
                          schema = NULL,
