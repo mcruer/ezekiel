@@ -433,7 +433,7 @@ ezql_list_tables <- function(schema = NULL,
 #' }
 #'
 #' @export
-ezql_change_names <- function(df, rosetta, from = "from", to = "to") {
+ezql_change_names <- function(df, rosetta, from = "r", to = "sql") {
   if (min(c(from, to) %in% names(rosetta)) != 1){
     stop("One or more of from and/or to are not names in rosetta.")
   }
@@ -514,7 +514,7 @@ ezql_change_names <- function(df, rosetta, from = "from", to = "to") {
 #' @import dplyr
 #' @import rlang
 #' @export
-ezql_set_data_types <- function(df, rosetta, names_column = "names", type_function_column = "type_function") {
+ezql_set_data_types <- function(df, rosetta, names_column = "sql", type_function_column = "r_type") {
 
   rosetta_column_names <- rosetta %>% dplyr::pull(names_column)
   rosetta_functions <- rosetta %>% dplyr::pull(type_function_column)
@@ -874,7 +874,7 @@ ezql_new_internal <- function(df,
 #' @export
 ezql_new <- function(df,
                      table,
-                     rosetta,
+                     rosetta = ezql_rosetta(),
                      rosetta_names_col = "sql",
                      rosetta_sql_types_col = "sql_type",
                      primary_key = NULL,
@@ -919,7 +919,7 @@ ezql_new <- function(df,
 #' @export
 ezql_replace <- function(df,
                          table,
-                         rosetta,
+                         rosetta = ezql_rosetta(),
                          rosetta_names_col = "sql",
                          rosetta_sql_types_col = "sql_type",
                          primary_key = NULL,
@@ -1109,7 +1109,7 @@ ezql_table_names <- function(table, schema = NULL, database = NULL, address = NU
 #' @seealso \code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}, \code{\link{ezql_set_data_types}}
 #' @export
 ezql_check_table <- function(df, table, schema = NULL, database = NULL, address = NULL,
-                             rosetta = NULL, names_column_sql = "sql",
+                             rosetta = ezql_rosetta(), names_column_sql = "sql",
                              type_function_column = "r_type"
 ) {
   # Resolve defaults
@@ -1252,7 +1252,7 @@ ezql_add_data <- function(df,
                           schema = NULL,
                           database = NULL,
                           address = NULL,
-                          rosetta = NULL,
+                          rosetta = ezql_rosetta(),
                           names_column_sql = "sql",
                           type_function_column = "r_type"
                           ) {
@@ -1374,7 +1374,7 @@ ezql_alter_data <- function(df,
                             schema = NULL,
                             database = NULL,
                             address = NULL,
-                            rosetta = NULL,
+                            rosetta = ezql_rosetta(),
                             names_column_sql = "sql",
                             type_function_column = "r_type"
                             ) {
@@ -1499,7 +1499,7 @@ ezql_delete_data <- function(df,
                              schema = NULL,
                              database = NULL,
                              address = NULL,
-                             rosetta = NULL,
+                             rosetta = ezql_rosetta(),
                              names_column_sql = "sql",
                              type_function_column = "r_type"
                              ) {
@@ -1658,7 +1658,7 @@ ezql_edit <- function(df,
                       database = NULL,
                       address = NULL,
                       delete_missing_rows = FALSE,
-                      rosetta = NULL,
+                      rosetta = ezql_rosetta(),
                       names_column_r = "r",
                       names_column_sql = "sql",
                       type_function_column = "r_type"
