@@ -2,32 +2,43 @@
 % Please edit documentation in R/sql.R
 \name{ezql_new}
 \alias{ezql_new}
-\title{Create a New Table in the Database if it Does Not Exist}
+\title{Create a New Table in the Database}
 \usage{
 ezql_new(
   df,
   table,
-  rosetta = ezql_rosetta(),
-  rosetta_names_col = "sql",
-  rosetta_sql_types_col = "sql_type",
-  primary_key = NULL,
+  primary_key,
+  make_temporal_table,
+  new_rosetta_rows = NULL,
+  existing_rosetta = ezql_rosetta(),
   schema = NULL,
   database = NULL,
   address = NULL
 )
 }
 \arguments{
-\item{df}{A data frame containing the data to be inserted into the new table.}
+\item{df}{A data frame (R-side column names) to create the table from.}
 
 \item{table}{A string specifying the name of the table to be created.}
 
-\item{rosetta}{A data frame that maps R column names to SQL column names and types.}
+\item{primary_key}{An R-side column name to set as the primary key. Required.
+Must be a column of \code{df}, and its rosetta \code{sql_type} must include
+\code{NOT NULL}.}
 
-\item{rosetta_names_col}{A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.}
+\item{make_temporal_table}{Logical, no default. If \code{TRUE}, the new table
+is converted to a system-versioned temporal table via
+\code{ezql_make_temporal()} as the final step.}
 
-\item{rosetta_sql_types_col}{A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.}
+\item{new_rosetta_rows}{An optional tibble of rosetta rows (same structure as
+\code{existing_rosetta}) describing columns not yet in the rosetta. Genuinely
+new rows are uploaded to the \code{ezql_rosetta} table before the table is
+created. A row sharing an \code{r} or \code{sql} value with an existing
+rosetta row is permitted only if the entire row is identical (in which case
+it is skipped); if it differs in any field it is treated as a conflict and
+errors. Defaults to \code{NULL}.}
 
-\item{primary_key}{A string specifying the column to set as the primary key. Defaults to `NULL` and no primary key is set if not provided.}
+\item{existing_rosetta}{The current rosetta mapping. Defaults to
+\code{ezql_rosetta()}.}
 
 \item{schema}{A string specifying the schema name. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.}
 
@@ -36,11 +47,30 @@ ezql_new(
 \item{address}{A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.}
 }
 \value{
-No return value. Stops with an error message if the table already exists.
+Invisibly returns the combined rosetta (existing plus any new rows).
 }
 \description{
-This function creates a new table in the specified schema and database using the provided data frame if the table does not already exist.
+Creates a new SQL table from an R-side data frame, first registering any new
+column definitions in the \code{ezql_rosetta} table and, optionally,
+converting the result into a system-versioned temporal table.
+
+Unlike the older design, the caller works entirely in R-side names: \code{df}
+uses R column names and \code{primary_key} is an R column name. Column-name and
+type translation to SQL is resolved through the rosetta mapping, consistent
+with the rest of the package's write path.
 }
 \details{
-This function checks for the existence of the specified table and only creates it if it does not exist, using the `ezql_new_internal` function for the actual creation process.
+This function assumes an \code{ezql_rosetta} table already exists on the
+server, as does the rest of the package. Operation order: validate the inputs
+and both rosettas, upload any genuinely new rosetta rows via
+\code{ezql_edit(table = "ezql_rosetta", ...)}, create the table (translating
+\code{df} from R to SQL names and typing columns from the rosetta
+\code{sql_type}), assign the primary key, and optionally make the table
+temporal.
+
+Validation performed: both rosettas share the same structure; every column of
+\code{df} appears in the \code{r} column of the combined rosetta; the primary
+key resolves to exactly one rosetta row whose \code{sql_type} includes
+\code{NOT NULL}; \code{new_rosetta_rows} has no internal duplicate \code{r} or
+\code{sql} values; and overlaps with \code{existing_rosetta} are identical.
 }

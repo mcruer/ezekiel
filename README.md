@@ -98,11 +98,14 @@ results <- ezql_query("SELECT TOP 10 * FROM dbo.my_table")
 ### 3. Write data
 
 ```r
-# Create a new table from a data frame (errors if it already exists)
-ezql_new(df, "my_table", primary_key = "ID")
-
-# Replace an existing table (errors if it does not exist)
-ezql_replace(df, "my_table", primary_key = "ID")
+# Create a new table from a data frame (R-side names; errors if it already exists).
+# Registers any new column definitions in ezql_rosetta first, then creates the table.
+ezql_new(
+  df,
+  "my_table",
+  primary_key = "id",          # R-side column name; its sql_type must include NOT NULL
+  make_temporal_table = FALSE
+)
 
 # Drop a table
 ezql_drop("my_table")
@@ -180,7 +183,7 @@ A selection of the exported functions, grouped by purpose:
 - **Reading:** `ezql_get()`, `ezql_get_as_of()`, `ezql_table()`, `ezql_query()`,
   `ezql_list_tables()`, `ezql_table_names()`, `ezql_table_exists()`,
   `ezql_full_table_name()`
-- **Writing / table lifecycle:** `ezql_new()`, `ezql_replace()`, `ezql_drop()`,
+- **Writing / table lifecycle:** `ezql_new()`, `ezql_drop()`,
   `ezql_edit()`, `ezql_add_data()`, `ezql_alter_data()`, `ezql_delete_data()`,
   `ezql_check_table()`, `ezql_fix()`, `ezql_change_names()`,
   `ezql_set_data_types()`
