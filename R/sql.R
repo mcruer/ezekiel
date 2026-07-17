@@ -1896,31 +1896,37 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
 
 #' Apply a Targeted Data Fix and Log the Change
 #'
-#' This function performs a controlled update of a single record in a SQL table.
-#' It:
-#' - Retrieves the existing record from the server
+#' This function performs a controlled edit, deletion, or insertion of a single
+#' record in a SQL table, depending on whether \code{df}, \code{delete}, or
+#' \code{add} is supplied. It:
+#' - Retrieves the existing record from the server (for edits and deletions)
 #' - Logs the old and new values, supporting files, user identity, and update note locally
-#' - Applies the corrected record via \code{ezql_edit()}
+#' - Applies the change via \code{ezql_edit()} (edits and inserts) or a \code{DELETE} query
 #'
 #' Each fix is stored in its own timestamped subfolder under
 #' \code{file.path(ezql_log_path(), table)}, along with a central
 #' \code{fix_log.txt} that records the user, timestamp, key, and note for each change.
 #'
 #' @param df A one-row tibble containing the corrected data (R-side column names).
-#'   Mutually exclusive with \code{delete}.
+#'   Used to edit an existing row. Mutually exclusive with \code{delete} and \code{add}.
 #' @param table The target SQL table name.
 #' @param update_note A text note describing the reason or context for the fix.
 #' @param user The name or identifier of the individual performing the fix.
 #'   Recorded in the central \code{fix_log.txt} for traceability.
 #' @param delete A one-row tibble containing only the primary key column(s) (R-side names)
-#'   of the row to delete. Mutually exclusive with \code{df}. The full row is saved to
-#'   \code{target_old.rds} before deletion for audit purposes.
+#'   of the row to delete. Mutually exclusive with \code{df} and \code{add}. The full row
+#'   is saved to \code{target_old.rds} before deletion for audit purposes.
 #' @param file_paths Optional character vector of file or folder paths to include in the log.
 #'   Defaults to \code{NULL}. Missing files trigger an error.
 #' @param rosetta A rosetta mapping tibble linking R and SQL column names.
 #'   Defaults to \code{ezql_rosetta()}.
 #' @param schema,database,address Optional SQL connection details;
 #'   defaults to values from \code{ezql_details_*()}.
+#' @param add A one-row tibble containing the data for a new row (R-side column names).
+#'   Mutually exclusive with \code{df} and \code{delete}. The primary key column(s) must be
+#'   supplied and must not already exist in the target table; the function errors otherwise.
+#'   Columns omitted from \code{add} are inserted as \code{NA} (subject to the table's own
+#'   defaults and constraints). Defaults to \code{NULL}.
 #'
 #' @details
 #' Primary key values are converted to character type using \code{gplyr::to_character()}
@@ -1949,16 +1955,19 @@ ezql_fix <- function(
     rosetta = ezql_rosetta(),
     schema = NULL,
     database = NULL,
-    address = NULL
+    address = NULL,
+    add = NULL
     #testing = TRUE
 ) {
   testing <- FALSE
 
-  # ---- 0. Validate exactly one of df / delete is supplied --------------------
-  if (is.null(df) && is.null(delete))
-    stop("Either `df` or `delete` must be provided.")
-  if (!is.null(df) && !is.null(delete))
-    stop("Only one of `df` or `delete` may be provided, not both.")
+  # ---- 0. Validate exactly one of df / delete / add is supplied --------------
+  supplied <- c(df = !is.null(df), delete = !is.null(delete), add = !is.null(add))
+  if (sum(supplied) == 0)
+    stop("One of `df`, `delete`, or `add` must be provided.")
+  if (sum(supplied) > 1)
+    stop("Only one of `df`, `delete`, or `add` may be provided, not: ",
+         paste(names(supplied)[supplied], collapse = ", "), ".")
 
   # ---- 1. Validate supplied files / folders ----------------------------------
   if (!is.null(file_paths) && length(file_paths) > 0) {
@@ -2028,6 +2037,19 @@ ezql_fix <- function(
 
     pk_source <- delete
 
+  } else if (!is.null(add)) {
+
+    if (!all(pk_r %in% names(add)))
+      stop(
+        "The primary key column(s) must be present in `add` using R-side names: ",
+        paste(pk_r, collapse = ", ")
+      )
+
+    if (nrow(add) > 1) stop("`add` can only contain one row.")
+    if (nrow(add) == 0) stop("`add` contains 0 rows.")
+
+    pk_source <- add
+
   } else {
 
     if (!all(pk_r %in% names(df)))
@@ -2044,22 +2066,30 @@ ezql_fix <- function(
   }
 
   # ---- 5. Retrieve target_old (R-side columns via ezql_table) ----------------
-  target_old <- ezql_table(
+  full_tbl <- ezql_table(
     table   = table,
     schema  = schema,
     database = database,
     address  = address,
     use_rosetta = TRUE
-  ) %>%
+  )
+
+  target_old <- full_tbl %>%
     dplyr::filter(
       !!!purrr::map(pk_r, ~ rlang::expr(.data[[!!.x]] == !!pk_source[[.x]]))
     )
 
-  if (nrow(target_old) == 0) {
-    stop("No matching record found in target table for the given primary key.")
-  }
-  if (nrow(target_old) > 1) {
-    stop("Multiple rows found for this primary key; fix aborted.")
+  if (!is.null(add)) {
+    if (nrow(target_old) > 0) {
+      stop("A record with this primary key already exists; use `df` to edit it instead of `add`.")
+    }
+  } else {
+    if (nrow(target_old) == 0) {
+      stop("No matching record found in target table for the given primary key.")
+    }
+    if (nrow(target_old) > 1) {
+      stop("Multiple rows found for this primary key; fix aborted.")
+    }
   }
 
   # ---- 6. Build key string (collapsed PK values, R-side) ---------------------
@@ -2108,6 +2138,26 @@ ezql_fix <- function(
   if (!is.null(delete)) {
 
     readr::write_rds(delete, fs::path(new_fix_folder, "delete_input.rds"))
+
+  } else if (!is.null(add)) {
+
+    readr::write_rds(add, fs::path(new_fix_folder, "add_input.rds"))
+
+    # ---- 11. Build new row from an NA template of the table structure --------
+    invalid_cols <- setdiff(names(add), names(full_tbl))
+    if (length(invalid_cols) > 0) {
+      stop("`add` contains columns not found in the target table: ",
+           paste(invalid_cols, collapse = ", "))
+    }
+
+    # One all-NA row with the correct columns and types
+    target_new <- full_tbl[NA_integer_, ]
+
+    # Overwrite with any values supplied in add
+    cols_to_patch <- names(add)
+    target_new[cols_to_patch] <- add[cols_to_patch]
+
+    readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
 
   } else {
 
@@ -2197,7 +2247,7 @@ ezql_fix <- function(
   }
 
   # ---- 13. Append to table-level fix_log.txt ---------------------------------
-  action <- if (!is.null(delete)) "delete" else "update"
+  action <- if (!is.null(delete)) "delete" else if (!is.null(add)) "add" else "update"
 
   log_entry <- stringr::str_c(
     format(lubridate::now(), "%Y-%m-%d %H:%M:%S"),
