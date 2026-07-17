@@ -419,7 +419,7 @@ ezql_list_tables <- function(schema = NULL,
 #' This function changes the column names of a data frame based on a mapping provided in a "rosetta" table. It uses a custom function to fill missing values in the new column names with the original names if necessary. Optionally, it can drop the column used for filling in the missing names.
 #'
 #' @param df A data frame whose column names need to be changed.
-#' @param rosetta A data frame containing at least two columns: one for the current names and another for the new names. The names of these columns are specified by `from` and `to`.
+#' @param rosetta A data frame containing at least two columns: one for the current names and another for the new names. The names of these columns are specified by `from` and `to`. Defaults to `ezql_rosetta()`.
 #' @param from A string specifying the name of the column in `rosetta` that contains the current names. Defaults to "from".
 #' @param to A string specifying the name of the column in `rosetta` that contains the new names. Defaults to "to".
 #'
@@ -433,7 +433,7 @@ ezql_list_tables <- function(schema = NULL,
 #' }
 #'
 #' @export
-ezql_change_names <- function(df, rosetta, from = "r", to = "sql") {
+ezql_change_names <- function(df, rosetta = ezql_rosetta(), from = "r", to = "sql") {
   if (min(c(from, to) %in% names(rosetta)) != 1){
     stop("One or more of from and/or to are not names in rosetta.")
   }
@@ -498,7 +498,7 @@ ezql_change_names <- function(df, rosetta, from = "r", to = "sql") {
 #' This function applies type transformations to columns in a dataframe based on a provided mapping (rosetta). The function checks for the presence of the specified columns and functions, applies the transformations, and then restores any previous grouping on the dataframe.
 #'
 #' @param df A dataframe whose columns are to be transformed.
-#' @param rosetta A dataframe containing at least two columns: one with the names of the columns to transform (`names_column`) and another with the names of the functions to apply (`type_function_column`).
+#' @param rosetta A dataframe containing at least two columns: one with the names of the columns to transform (`names_column`) and another with the names of the functions to apply (`type_function_column`). Defaults to `ezql_rosetta()`.
 #' @param names_column A string specifying the name of the column in `rosetta` that contains the column names of `df`. Defaults to "names".
 #' @param type_function_column A string specifying the name of the column in `rosetta` that contains the function names as strings. Defaults to "type_function".
 #'
@@ -514,7 +514,7 @@ ezql_change_names <- function(df, rosetta, from = "r", to = "sql") {
 #' @import dplyr
 #' @import rlang
 #' @export
-ezql_set_data_types <- function(df, rosetta, names_column = "sql", type_function_column = "r_type") {
+ezql_set_data_types <- function(df, rosetta = ezql_rosetta(), names_column = "sql", type_function_column = "r_type") {
 
   rosetta_column_names <- rosetta %>% dplyr::pull(names_column)
   rosetta_functions <- rosetta %>% dplyr::pull(type_function_column)
