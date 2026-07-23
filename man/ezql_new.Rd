@@ -53,13 +53,14 @@ Invisibly returns the combined rosetta (existing plus any new rows).
 Creates a new SQL table from an R-side data frame, first registering any new
 column definitions in the \code{ezql_rosetta} table and, optionally,
 converting the result into a system-versioned temporal table.
-
+}
+\details{
 Unlike the older design, the caller works entirely in R-side names: \code{df}
 uses R column names and \code{primary_key} is an R column name. Column-name and
 type translation to SQL is resolved through the rosetta mapping, consistent
 with the rest of the package's write path.
-}
-\details{
+
+
 This function assumes an \code{ezql_rosetta} table already exists on the
 server, as does the rest of the package. Operation order: validate the inputs
 and both rosettas, upload any genuinely new rosetta rows via
