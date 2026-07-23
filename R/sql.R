@@ -812,11 +812,49 @@ ezql_make_temporal <- function(table,
   # Only reached when statement 1 succeeded or was skipped.
   res2 <- ezql_query(query2, database, address)
   if (!res2[[1]]$success) {
+    # Enabling SYSTEM_VERSIONING creates the history table, which needs
+    # CREATE TABLE at the database level plus ALTER on the target schema --
+    # permissions distinct from ALTER on the table itself. Pinpoint which one
+    # is actually missing so the error is a diagnosis, not a guess.
+    perm_hint <- tryCatch({
+      perm_query <- stringr::str_c(
+        "SELECT ",
+        "HAS_PERMS_BY_NAME(NULL, 'DATABASE', 'CREATE TABLE') AS can_create_table, ",
+        "HAS_PERMS_BY_NAME('", schema, "', 'SCHEMA', 'ALTER') AS can_alter_schema;"
+      )
+      perm_res <- ezql_query(perm_query, database, address)
+      if (perm_res[[1]]$success) {
+        missing <- character(0)
+        if (isTRUE(perm_res[[1]]$result$can_create_table == 0)) {
+          missing <- c(missing, stringr::str_c(
+            "database-level CREATE TABLE in '", database,
+            "' (grant with: GRANT CREATE TABLE TO <your_login>)"))
+        }
+        if (isTRUE(perm_res[[1]]$result$can_alter_schema == 0)) {
+          missing <- c(missing, stringr::str_c(
+            "ALTER on schema '", schema,
+            "' (grant with: GRANT ALTER ON SCHEMA::", schema, " TO <your_login>)"))
+        }
+        if (length(missing) > 0) {
+          stringr::str_c(" Confirmed missing permission(s): ",
+                         paste(missing, collapse = "; "), ".")
+        } else {
+          stringr::str_c(" You appear to hold CREATE TABLE and ALTER SCHEMA::",
+                         schema, ", so the failure may stem from an existing/",
+                         "incompatible history table or another cause -- ",
+                         "inspect the SQL Server error below.")
+        }
+      } else {
+        ""
+      }
+    }, error = function(e) "")
+
     stop("Failed to enable SYSTEM_VERSIONING on '", full_table_name,
          "'. This step creates the history table '", history_table_name,
          "', which requires CREATE TABLE permission in database '", database,
-         "' (a database-level permission, distinct from ALTER on the table). ",
-         "The table now has its period columns but is not yet system-versioned; ",
+         "' and ALTER on schema '", schema,
+         "' (both distinct from ALTER on the table).", perm_hint,
+         " The table now has its period columns but is not yet system-versioned; ",
          "re-run ezql_make_temporal() to complete it once permissions allow. ",
          "SQL Server error: ", paste(res2[[1]]$error, collapse = " "))
   }
