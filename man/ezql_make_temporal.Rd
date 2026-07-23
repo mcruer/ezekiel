@@ -24,8 +24,29 @@ ezql_make_temporal(
 \item{address}{A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.}
 }
 \value{
-No return value. The function executes SQL queries to alter the table.
+Invisibly returns `TRUE` on success. The function executes SQL queries
+to alter the table.
 }
 \description{
 This function converts a specified SQL table into a system-versioned temporal table.
+}
+\details{
+The conversion is performed in two `ALTER TABLE` statements: statement 1 adds
+the `ValidFrom`/`ValidTo` period columns plus `PERIOD FOR SYSTEM_TIME`, and
+statement 2 turns on `SYSTEM_VERSIONING` (which creates the history table).
+
+The function is idempotent and self-healing. Before doing anything it inspects
+the table's current temporal state via `sys.tables`/`sys.periods`:
+\itemize{
+  \item If the table is already a system-versioned temporal table, it does
+    nothing and returns.
+  \item If the period columns already exist but versioning is off (a table
+    left "half-converted" by a previously failed run), it skips statement 1
+    and only runs statement 2 to complete the conversion. This avoids the
+    `Column name 'ValidFrom' ... specified more than once` error (SQL 2705).
+  \item Otherwise it runs both statements.
+}
+Statements are executed sequentially with per-statement error checking: if
+statement 1 fails, statement 2 is \strong{not} attempted, and any failure is
+surfaced as an R error rather than silently leaving the table half-converted.
 }

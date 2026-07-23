@@ -707,7 +707,27 @@ ezql_assign_primary_key <- function(table,
 #' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
 #' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
 #' @param primary_key_column A string specifying the name of the column to set as the primary key. Defaults to "ID".
-#' @return No return value. The function executes SQL queries to alter the table.
+#' @return Invisibly returns `TRUE` on success. The function executes SQL queries
+#'   to alter the table.
+#' @details
+#' The conversion is performed in two `ALTER TABLE` statements: statement 1 adds
+#' the `ValidFrom`/`ValidTo` period columns plus `PERIOD FOR SYSTEM_TIME`, and
+#' statement 2 turns on `SYSTEM_VERSIONING` (which creates the history table).
+#'
+#' The function is idempotent and self-healing. Before doing anything it inspects
+#' the table's current temporal state via `sys.tables`/`sys.periods`:
+#' \itemize{
+#'   \item If the table is already a system-versioned temporal table, it does
+#'     nothing and returns.
+#'   \item If the period columns already exist but versioning is off (a table
+#'     left "half-converted" by a previously failed run), it skips statement 1
+#'     and only runs statement 2 to complete the conversion. This avoids the
+#'     `Column name 'ValidFrom' ... specified more than once` error (SQL 2705).
+#'   \item Otherwise it runs both statements.
+#' }
+#' Statements are executed sequentially with per-statement error checking: if
+#' statement 1 fails, statement 2 is \strong{not} attempted, and any failure is
+#' surfaced as an R error rather than silently leaving the table half-converted.
 #' @importFrom stringr str_c
 #' @export
 ezql_make_temporal <- function(table,
@@ -723,12 +743,8 @@ ezql_make_temporal <- function(table,
   address <- address %||% ezql_details_add()
 
   if (is.null (schema) || is.null(database) || is.null(address)) {
-    stop("Shema, database, and address must be provided either as arguments or automatically through ezql_details.")
+    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
   }
-
-
-  # Assign primary key if necessary
-  ezql_assign_primary_key(table, primary_key_column, schema, database, address)
 
   # Construct full table names and constraints
   full_table_name <- ezql_full_table_name(schema, table)
@@ -736,7 +752,37 @@ ezql_make_temporal <- function(table,
   to_constraint <- stringr::str_c('DF_', table, '_ValidTo')
   history_table_name <- stringr::str_c(full_table_name, '_history')
 
-  # Create the queries with corrected SQL syntax
+  # ---- Inspect current temporal state (idempotency / self-healing) -----------
+  # temporal_type: 0 = NON_TEMPORAL_TABLE, 2 = SYSTEM_VERSIONED_TEMPORAL_TABLE.
+  # period_count : number of PERIOD FOR SYSTEM_TIME definitions (0 or 1).
+  state_query <- stringr::str_c(
+    "SELECT t.temporal_type AS temporal_type, ",
+    "(SELECT COUNT(*) FROM sys.periods p WHERE p.object_id = t.object_id) AS period_count ",
+    "FROM sys.tables t WHERE t.object_id = OBJECT_ID('", full_table_name, "');"
+  )
+  state_res <- ezql_query(state_query, database, address)
+  if (!state_res[[1]]$success) {
+    stop("Failed to inspect the temporal state of '", full_table_name, "': ",
+         paste(state_res[[1]]$error, collapse = " "))
+  }
+  state <- state_res[[1]]$result
+  if (is.null(state) || nrow(state) == 0) {
+    stop("Table '", full_table_name, "' was not found; cannot make it temporal.")
+  }
+
+  already_temporal <- state$temporal_type == 2
+  period_exists    <- state$period_count > 0
+
+  if (already_temporal) {
+    message("Table '", full_table_name,
+            "' is already a system-versioned temporal table; nothing to do.")
+    return(invisible(TRUE))
+  }
+
+  # Assign primary key if necessary (system versioning requires a primary key).
+  ezql_assign_primary_key(table, primary_key_column, schema, database, address)
+
+  # Statement 1: add the period columns + PERIOD FOR SYSTEM_TIME.
   query1 <- stringr::str_c(
     'ALTER TABLE ', full_table_name, ' ADD ',
     'ValidFrom datetime2 (2) GENERATED ALWAYS AS ROW START HIDDEN constraint ', from_constraint, ' DEFAULT DATEADD(second, -1, SYSDATETIME()), ',
@@ -744,12 +790,38 @@ ezql_make_temporal <- function(table,
     'PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo);'
   )
 
+  # Statement 2: enable system versioning (this creates the history table).
   query2 <- stringr::str_c(
     'ALTER TABLE ', full_table_name, ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ', history_table_name, '));'
   )
-  print (c(query1, query2))
-  # Execute both queries sequentially using the modified ezql_query
-  ezql_query(c(query1, query2), database, address)
+
+  if (!period_exists) {
+    res1 <- ezql_query(query1, database, address)
+    if (!res1[[1]]$success) {
+      stop("Failed to add the ValidFrom/ValidTo period columns to '",
+           full_table_name, "'. SYSTEM_VERSIONING was not attempted. ",
+           "SQL Server error: ", paste(res1[[1]]$error, collapse = " "))
+    }
+  } else {
+    # Period columns are present but versioning is off: a table left
+    # half-converted by an earlier failed run. Skip statement 1 and complete it.
+    message("Period columns already present on '", full_table_name,
+            "'; completing conversion by enabling SYSTEM_VERSIONING.")
+  }
+
+  # Only reached when statement 1 succeeded or was skipped.
+  res2 <- ezql_query(query2, database, address)
+  if (!res2[[1]]$success) {
+    stop("Failed to enable SYSTEM_VERSIONING on '", full_table_name,
+         "'. This step creates the history table '", history_table_name,
+         "', which requires CREATE TABLE permission in database '", database,
+         "' (a database-level permission, distinct from ALTER on the table). ",
+         "The table now has its period columns but is not yet system-versioned; ",
+         "re-run ezql_make_temporal() to complete it once permissions allow. ",
+         "SQL Server error: ", paste(res2[[1]]$error, collapse = " "))
+  }
+
+  invisible(TRUE)
 }
 
 #' Check if a Table Exists in the Database
