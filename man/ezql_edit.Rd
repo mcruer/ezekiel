@@ -11,7 +11,7 @@ ezql_edit(
   database = NULL,
   address = NULL,
   delete_missing_rows = FALSE,
-  rosetta = NULL,
+  rosetta = ezql_rosetta(),
   names_column_r = "r",
   names_column_sql = "sql",
   type_function_column = "r_type"

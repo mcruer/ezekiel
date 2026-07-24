@@ -6,15 +6,15 @@
 \usage{
 ezql_set_data_types(
   df,
-  rosetta,
-  names_column = "names",
-  type_function_column = "type_function"
+  rosetta = ezql_rosetta(),
+  names_column = "sql",
+  type_function_column = "r_type"
 )
 }
 \arguments{
 \item{df}{A dataframe whose columns are to be transformed.}
 
-\item{rosetta}{A dataframe containing at least two columns: one with the names of the columns to transform (`names_column`) and another with the names of the functions to apply (`type_function_column`).}
+\item{rosetta}{A dataframe containing at least two columns: one with the names of the columns to transform (`names_column`) and another with the names of the functions to apply (`type_function_column`). Defaults to `ezql_rosetta()`.}
 
 \item{names_column}{A string specifying the name of the column in `rosetta` that contains the column names of `df`. Defaults to "names".}
 

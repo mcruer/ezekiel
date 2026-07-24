@@ -5,19 +5,22 @@
 \title{Apply a Targeted Data Fix and Log the Change}
 \usage{
 ezql_fix(
-  df,
+  df = NULL,
   table,
   update_note,
   user,
+  delete = NULL,
   file_paths = NULL,
   rosetta = ezql_rosetta(),
   schema = NULL,
   database = NULL,
-  address = NULL
+  address = NULL,
+  add = NULL
 )
 }
 \arguments{
-\item{df}{A one-row tibble containing the corrected data (R-side column names).}
+\item{df}{A one-row tibble containing the corrected data (R-side column names).
+Used to edit an existing row. Mutually exclusive with \code{delete} and \code{add}.}
 
 \item{table}{The target SQL table name.}
 
@@ -25,6 +28,10 @@ ezql_fix(
 
 \item{user}{The name or identifier of the individual performing the fix.
 Recorded in the central \code{fix_log.txt} for traceability.}
+
+\item{delete}{A one-row tibble containing only the primary key column(s) (R-side names)
+of the row to delete. Mutually exclusive with \code{df} and \code{add}. The full row
+is saved to \code{target_old.rds} before deletion for audit purposes.}
 
 \item{file_paths}{Optional character vector of file or folder paths to include in the log.
 Defaults to \code{NULL}. Missing files trigger an error.}
@@ -34,16 +41,23 @@ Defaults to \code{ezql_rosetta()}.}
 
 \item{schema, database, address}{Optional SQL connection details;
 defaults to values from \code{ezql_details_*()}.}
+
+\item{add}{A one-row tibble containing the data for a new row (R-side column names).
+Mutually exclusive with \code{df} and \code{delete}. The primary key column(s) must be
+supplied and must not already exist in the target table; the function errors otherwise.
+Columns omitted from \code{add} are inserted as \code{NA} (subject to the table's own
+defaults and constraints). Defaults to \code{NULL}.}
 }
 \value{
 Invisibly returns the result of the \code{ezql_edit()} operation.
 }
 \description{
-This function performs a controlled update of a single record in a SQL table.
-It:
-- Retrieves the existing record from the server
+This function performs a controlled edit, deletion, or insertion of a single
+record in a SQL table, depending on whether \code{df}, \code{delete}, or
+\code{add} is supplied. It:
+- Retrieves the existing record from the server (for edits and deletions)
 - Logs the old and new values, supporting files, user identity, and update note locally
-- Applies the corrected record via \code{ezql_edit()}
+- Applies the change via \code{ezql_edit()} (edits and inserts) or a \code{DELETE} query
 }
 \details{
 Each fix is stored in its own timestamped subfolder under

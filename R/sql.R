@@ -419,7 +419,7 @@ ezql_list_tables <- function(schema = NULL,
 #' This function changes the column names of a data frame based on a mapping provided in a "rosetta" table. It uses a custom function to fill missing values in the new column names with the original names if necessary. Optionally, it can drop the column used for filling in the missing names.
 #'
 #' @param df A data frame whose column names need to be changed.
-#' @param rosetta A data frame containing at least two columns: one for the current names and another for the new names. The names of these columns are specified by `from` and `to`.
+#' @param rosetta A data frame containing at least two columns: one for the current names and another for the new names. The names of these columns are specified by `from` and `to`. Defaults to `ezql_rosetta()`.
 #' @param from A string specifying the name of the column in `rosetta` that contains the current names. Defaults to "from".
 #' @param to A string specifying the name of the column in `rosetta` that contains the new names. Defaults to "to".
 #'
@@ -433,7 +433,7 @@ ezql_list_tables <- function(schema = NULL,
 #' }
 #'
 #' @export
-ezql_change_names <- function(df, rosetta, from = "from", to = "to") {
+ezql_change_names <- function(df, rosetta = ezql_rosetta(), from = "r", to = "sql") {
   if (min(c(from, to) %in% names(rosetta)) != 1){
     stop("One or more of from and/or to are not names in rosetta.")
   }
@@ -498,7 +498,7 @@ ezql_change_names <- function(df, rosetta, from = "from", to = "to") {
 #' This function applies type transformations to columns in a dataframe based on a provided mapping (rosetta). The function checks for the presence of the specified columns and functions, applies the transformations, and then restores any previous grouping on the dataframe.
 #'
 #' @param df A dataframe whose columns are to be transformed.
-#' @param rosetta A dataframe containing at least two columns: one with the names of the columns to transform (`names_column`) and another with the names of the functions to apply (`type_function_column`).
+#' @param rosetta A dataframe containing at least two columns: one with the names of the columns to transform (`names_column`) and another with the names of the functions to apply (`type_function_column`). Defaults to `ezql_rosetta()`.
 #' @param names_column A string specifying the name of the column in `rosetta` that contains the column names of `df`. Defaults to "names".
 #' @param type_function_column A string specifying the name of the column in `rosetta` that contains the function names as strings. Defaults to "type_function".
 #'
@@ -514,7 +514,7 @@ ezql_change_names <- function(df, rosetta, from = "from", to = "to") {
 #' @import dplyr
 #' @import rlang
 #' @export
-ezql_set_data_types <- function(df, rosetta, names_column = "names", type_function_column = "type_function") {
+ezql_set_data_types <- function(df, rosetta = ezql_rosetta(), names_column = "sql", type_function_column = "r_type") {
 
   rosetta_column_names <- rosetta %>% dplyr::pull(names_column)
   rosetta_functions <- rosetta %>% dplyr::pull(type_function_column)
@@ -532,6 +532,8 @@ ezql_set_data_types <- function(df, rosetta, names_column = "names", type_functi
   }
 
   if(!all(names(df) %in% rosetta_column_names)){
+    missing_cols <- tibble::tibble(column = setdiff(names(df), rosetta_column_names))
+    print(missing_cols)
     warning("Not all variables in df are listed in the rosetta. These variables will remain unchanged.")
   }
 
@@ -787,177 +789,208 @@ ezql_table_exists <- function(table, schema = NULL, database = NULL, address = N
   return(result[[1]]$result$TableCount > 0)
 }
 
-#' Internal Function to Create a New Table in the Database
+#' Create a New Table in the Database
 #'
-#' This internal function creates a new table in the specified schema and database using the provided data frame and a rosetta data frame that maps R column names to SQL column names and types.
+#' Creates a new SQL table from an R-side data frame, first registering any new
+#' column definitions in the \code{ezql_rosetta} table and, optionally,
+#' converting the result into a system-versioned temporal table.
 #'
-#' @param df A data frame containing the data to be inserted into the new table.
+#' Unlike the older design, the caller works entirely in R-side names: \code{df}
+#' uses R column names and \code{primary_key} is an R column name. Column-name and
+#' type translation to SQL is resolved through the rosetta mapping, consistent
+#' with the rest of the package's write path.
+#'
+#' @param df A data frame (R-side column names) to create the table from.
 #' @param table A string specifying the name of the table to be created.
-#' @param rosetta A data frame that maps R column names to SQL column names and SQL types. This mapping ensures the correct data types are used in the SQL table.
-#' @param rosetta_names_col A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.
-#' @param rosetta_sql_types_col A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.
+#' @param primary_key An R-side column name to set as the primary key. Required.
+#'   Must be a column of \code{df}, and its rosetta \code{sql_type} must include
+#'   \code{NOT NULL}.
+#' @param make_temporal_table Logical, no default. If \code{TRUE}, the new table
+#'   is converted to a system-versioned temporal table via
+#'   \code{ezql_make_temporal()} as the final step.
+#' @param new_rosetta_rows An optional tibble of rosetta rows (same structure as
+#'   \code{existing_rosetta}) describing columns not yet in the rosetta. Genuinely
+#'   new rows are uploaded to the \code{ezql_rosetta} table before the table is
+#'   created. A row sharing an \code{r} or \code{sql} value with an existing
+#'   rosetta row is permitted only if the entire row is identical (in which case
+#'   it is skipped); if it differs in any field it is treated as a conflict and
+#'   errors. Defaults to \code{NULL}.
+#' @param existing_rosetta The current rosetta mapping. Defaults to
+#'   \code{ezql_rosetta()}.
 #' @param schema A string specifying the schema name. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.
 #' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
 #' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
-#' @param primary_key A string specifying the column to set as the primary key. Defaults to `NULL` and no primary key is set if not provided.
-#' @return No return value. This function is called for its side effects of creating a table in the specified schema and database.
-#' @details This function connects to the specified SQL server, creates a new table according to the schema provided in the rosetta data frame, and inserts the data from the provided data frame. The function will stop and throw an error if there are any issues with the rosetta mapping, such as duplicate column names or mismatches with the data frame.
-#' @importFrom stringr str_c
-#' @importFrom rlang sym
-#' @importFrom RODBC sqlSave odbcClose
-#' @importFrom dplyr left_join
-#' @importFrom tibble tibble
-#' @keywords internal
-ezql_new_internal <- function(df,
-                              table,
-                              rosetta,
-                              rosetta_names_col = "sql_name",
-                              rosetta_sql_types_col = "sql_type",
-                              schema = NULL,
-                              database = NULL,
-                              address = NULL,
-                              primary_key = NULL) {
-
-  schema <- schema %||% ezql_details_schema()
-  database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
-
-  if (is.null(schema) || is.null(database) || is.null(address)) {
-    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
-  }
-
-  rosetta_names <- rosetta[[rosetta_names_col]]
-
-  if(!identical(unique(rosetta_names), rosetta_names)){
-    stop(stringr::str_c("The rosetta contains duplicate values in the ", rosetta_names_col, " column."))
-  }
-
-  if(!all (names(df) %in% rosetta_names)){
-    stop("Every column in df must be included in rosetta.")
-  }
-
-  rosetta_sql_types <- rosetta [[rosetta_sql_types_col]]
-  names(rosetta_sql_types) <- rosetta[[rosetta_names_col]]
-
-  full_table_name <- ezql_full_table_name(schema, table)
-
-  print(full_table_name)
-
-  # Connect to server
-  connection <- ezql_connect(database, address)
-
-  # Create the table
-  RODBC::sqlSave(connection, df, full_table_name, rownames = FALSE, varTypes = rosetta_sql_types)
-
-  # Close connection after table creation
-  RODBC::odbcClose(connection)
-
-  # Set the primary key if specified using ezql_assign_primary_key
-  if (!is.null(primary_key)) {
-    ezql_assign_primary_key(table, primary_key, schema = schema, database = database, address = address)
-  }
-}
-
-
-
-#' Create a New Table in the Database if it Does Not Exist
 #'
-#' This function creates a new table in the specified schema and database using the provided data frame if the table does not already exist.
+#' @details
+#' This function assumes an \code{ezql_rosetta} table already exists on the
+#' server, as does the rest of the package. Operation order: validate the inputs
+#' and both rosettas, upload any genuinely new rosetta rows via
+#' \code{ezql_edit(table = "ezql_rosetta", ...)}, create the table (translating
+#' \code{df} from R to SQL names and typing columns from the rosetta
+#' \code{sql_type}), assign the primary key, and optionally make the table
+#' temporal.
 #'
-#' @param df A data frame containing the data to be inserted into the new table.
-#' @param table A string specifying the name of the table to be created.
-#' @param rosetta A data frame that maps R column names to SQL column names and types.
-#' @param rosetta_names_col A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.
-#' @param rosetta_sql_types_col A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.
-#' @param schema A string specifying the schema name. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.
-#' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
-#' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
-#' @param primary_key A string specifying the column to set as the primary key. Defaults to `NULL` and no primary key is set if not provided.
-#' @return No return value. Stops with an error message if the table already exists.
-#' @details This function checks for the existence of the specified table and only creates it if it does not exist, using the `ezql_new_internal` function for the actual creation process.
+#' Validation performed: both rosettas share the same structure; every column of
+#' \code{df} appears in the \code{r} column of the combined rosetta; the primary
+#' key resolves to exactly one rosetta row whose \code{sql_type} includes
+#' \code{NOT NULL}; \code{new_rosetta_rows} has no internal duplicate \code{r} or
+#' \code{sql} values; and overlaps with \code{existing_rosetta} are identical.
+#'
+#' @return Invisibly returns the combined rosetta (existing plus any new rows).
 #' @importFrom stringr str_c
 #' @export
 ezql_new <- function(df,
                      table,
-                     rosetta,
-                     rosetta_names_col = "sql_name",
-                     rosetta_sql_types_col = "sql_type",
-                     primary_key = NULL,
+                     primary_key,
+                     make_temporal_table,
+                     new_rosetta_rows = NULL,
+                     existing_rosetta = ezql_rosetta(),
                      schema = NULL,
                      database = NULL,
                      address = NULL) {
-  schema <- schema %||% ezql_details_schema()
+
+  # ---- 0. Resolve connection details -----------------------------------------
+  schema   <- schema   %||% ezql_details_schema()
   database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
+  address  <- address  %||% ezql_details_add()
 
   if (is.null(schema) || is.null(database) || is.null(address)) {
     stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
   }
 
+  # ---- 1. Validate scalar arguments ------------------------------------------
+  if (!is.logical(make_temporal_table) || length(make_temporal_table) != 1 ||
+      is.na(make_temporal_table)) {
+    stop("`make_temporal_table` must be a single TRUE or FALSE.")
+  }
+
+  if (!is.character(primary_key) || length(primary_key) != 1) {
+    stop("`primary_key` must be a single R-side column name.")
+  }
+
+  if (!(primary_key %in% names(df))) {
+    stop("`primary_key` ('", primary_key, "') must be a column in `df` (R-side names).")
+  }
+
+  # Primary key values must be unique and non-NA (NOT NULL PK constraint).
+  pk_values <- df[[primary_key]]
+  if (any(is.na(pk_values))) {
+    stop("The primary key column '", primary_key,
+         "' contains NA values; a NOT NULL primary key cannot be created.")
+  }
+  if (anyDuplicated(pk_values)) {
+    stop("The primary key column '", primary_key,
+         "' contains duplicate values; a primary key cannot be created.")
+  }
+
+  # ---- 2. Validate rosetta structure -----------------------------------------
+  required_cols <- c("r", "sql", "sql_type", "r_type")
+
+  if (!all(required_cols %in% names(existing_rosetta))) {
+    stop("`existing_rosetta` must contain the columns: ",
+         paste(required_cols, collapse = ", "), ".")
+  }
+
+  if (!is.null(new_rosetta_rows)) {
+    if (!setequal(names(new_rosetta_rows), names(existing_rosetta))) {
+      stop("`new_rosetta_rows` and `existing_rosetta` must have the same structure (columns).")
+    }
+    # Align column order to existing_rosetta for consistent comparison / binding
+    new_rosetta_rows <- new_rosetta_rows[names(existing_rosetta)]
+  }
+
+  # ---- 3. Reconcile new_rosetta_rows against existing_rosetta -----------------
+  rows_to_upload <- existing_rosetta[0, ]
+
+  if (!is.null(new_rosetta_rows) && nrow(new_rosetta_rows) > 0) {
+
+    if (anyDuplicated(new_rosetta_rows$r) || anyDuplicated(new_rosetta_rows$sql)) {
+      stop("`new_rosetta_rows` contains duplicate `r` or `sql` values.")
+    }
+
+    overlap_mask <- new_rosetta_rows$r %in% existing_rosetta$r |
+      new_rosetta_rows$sql %in% existing_rosetta$sql
+
+    overlapping    <- new_rosetta_rows[overlap_mask, , drop = FALSE]
+    rows_to_upload <- new_rosetta_rows[!overlap_mask, , drop = FALSE]
+
+    # Overlapping rows must be verbatim members of existing_rosetta; anything that
+    # shares an `r` or `sql` value but is not an exact full-row match is a conflict.
+    if (nrow(overlapping) > 0) {
+      conflicts <- dplyr::anti_join(overlapping, existing_rosetta,
+                                    by = names(existing_rosetta))
+      if (nrow(conflicts) > 0) {
+        stop("`new_rosetta_rows` conflicts with existing rosetta entries ",
+             "(shares `r` or `sql` but differs) for: ",
+             paste(conflicts$r, collapse = ", "), ".")
+      }
+    }
+  }
+
+  combined_rosetta <- dplyr::bind_rows(existing_rosetta, rows_to_upload)
+
+  # ---- 4. Validate df columns are all mapped ---------------------------------
+  unmapped <- setdiff(names(df), combined_rosetta$r)
+  if (length(unmapped) > 0) {
+    stop("Every column in `df` must be in the `r` column of the rosetta. Unmapped: ",
+         paste(unmapped, collapse = ", "), ".")
+  }
+
+  # ---- 5. Resolve primary key rosetta row; validate NOT NULL -----------------
+  pk_row <- combined_rosetta %>% dplyr::filter(.data$r == primary_key)
+  if (nrow(pk_row) != 1) {
+    stop("Could not resolve a single rosetta row for primary key '", primary_key, "'.")
+  }
+  if (!grepl("NOT NULL", toupper(pk_row$sql_type))) {
+    stop("The primary key column '", primary_key, "' must have a `sql_type` that ",
+         "includes NOT NULL. Found: '", pk_row$sql_type, "'.")
+  }
+
+  # ---- 6. Confirm the target table does not already exist --------------------
   if (ezql_table_exists(table, schema, database, address)) {
     stop(stringr::str_c("Table '", schema, ".", table, "' already exists."))
   }
 
-  ezql_new_internal(df, table, rosetta,
-                    rosetta_names_col = rosetta_names_col,
-                    rosetta_sql_types_col = rosetta_sql_types_col,
-                    schema = schema, database = database, address = address,
-                    primary_key = primary_key)
-}
-
-#' Replace an Existing Table in the Database
-#'
-#' This function replaces an existing table in the specified schema and database with a new one created from the provided data frame. It stops with an error if the table does not exist.
-#'
-#' @param df A data frame containing the data to be inserted into the new table.
-#' @param table A string specifying the name of the table to be replaced.
-#' @param rosetta A data frame that maps R column names to SQL column names and types.
-#' @param rosetta_names_col A string specifying the column name in the rosetta data frame that contains the SQL column names. Defaults to `"sql_name"`.
-#' @param rosetta_sql_types_col A string specifying the column name in the rosetta data frame that contains the SQL data types. Defaults to `"sql_type"`.
-#' @param schema A string specifying the schema name. Defaults to `NULL` and uses the value from `ezql_details_schema()` if not provided.
-#' @param database A string specifying the database name. Defaults to `NULL` and uses the value from `ezql_details_db()` if not provided.
-#' @param address A string specifying the SQL server address. Defaults to `NULL` and uses the value from `ezql_details_add()` if not provided.
-#' @param primary_key A string specifying the column to set as the primary key. Defaults to `NULL` and no primary key is set if not provided.
-#' @return No return value. Stops with an error message if the table does not exist.
-#' @details This function checks for the existence of the specified table, drops it if it exists, and creates a new table using the `ezql_new_internal` function.
-#' @importFrom stringr str_c
-#' @export
-ezql_replace <- function(df,
-                         table,
-                         rosetta,
-                         rosetta_names_col = "sql_name",
-                         rosetta_sql_types_col = "sql_type",
-                         primary_key = NULL,
-                         schema = NULL,
-                         database = NULL,
-                         address = NULL) {
-  schema <- schema %||% ezql_details_schema()
-  database <- database %||% ezql_details_db()
-  address <- address %||% ezql_details_add()
-
-  if (is.null(schema) || is.null(database) || is.null(address)) {
-    stop("Schema, database, and address must be provided either as arguments or automatically through ezql_details.")
+  # ---- 7. Upload any genuinely new rosetta rows ------------------------------
+  if (nrow(rows_to_upload) > 0) {
+    ezql_edit(
+      df       = combined_rosetta,
+      table    = "ezql_rosetta",
+      rosetta  = combined_rosetta,
+      schema   = schema,
+      database = database,
+      address  = address
+    )
   }
 
-  if (!ezql_table_exists(table, schema, database, address)) {
-    stop(stringr::str_c("Table '",
-                        ezql_full_table_name(schema, table),
-                        "' does not exist."))
+  # ---- 8. Create the table (translate df R -> SQL, type via rosetta) ---------
+  df_sql <- ezql_change_names(df, rosetta = combined_rosetta, from = "r", to = "sql")
+
+  var_types     <- combined_rosetta %>% dplyr::filter(.data$sql %in% names(df_sql))
+  var_types_vec <- var_types$sql_type
+  names(var_types_vec) <- var_types$sql
+  var_types_vec <- var_types_vec[names(df_sql)]
+
+  full_table_name <- ezql_full_table_name(schema, table)
+  connection <- ezql_connect(database, address)
+  tryCatch(
+    RODBC::sqlSave(connection, df_sql, full_table_name,
+                   rownames = FALSE, varTypes = var_types_vec),
+    finally = RODBC::odbcClose(connection)
+  )
+
+  # ---- 9. Assign primary key (SQL name) / optionally make temporal -----------
+  pk_sql <- pk_row$sql
+
+  if (make_temporal_table) {
+    ezql_make_temporal(table, primary_key_column = pk_sql,
+                       schema = schema, database = database, address = address)
+  } else {
+    ezql_assign_primary_key(table, pk_sql,
+                            schema = schema, database = database, address = address)
   }
 
-  # Drop the existing table using ezql_query
-  drop_query <- stringr::str_c("DROP TABLE ", ezql_full_table_name(schema, table), ";")
-  drop_result <- ezql_query(drop_query, database, address)
-
-  if (!drop_result[[1]]$success) {
-    stop("Error dropping table: ", drop_result[[1]]$error)
-  }
-
-  ezql_new_internal(df, table, rosetta,
-                    rosetta_names_col = rosetta_names_col,
-                    rosetta_sql_types_col = rosetta_sql_types_col,
-                    schema = schema, database = database, address = address,
-                    primary_key = primary_key)
+  invisible(combined_rosetta)
 }
 
 #' Construct Full Table Name for SQL Queries
@@ -1114,7 +1147,7 @@ ezql_table_names <- function(table, schema = NULL, database = NULL, address = NU
 #' @seealso \code{\link{ezql_primary_key_name}}, \code{\link{ezql_table_names}}, \code{\link{ezql_get}}, \code{\link{ezql_set_data_types}}
 #' @export
 ezql_check_table <- function(df, table, schema = NULL, database = NULL, address = NULL,
-                             rosetta = NULL, names_column_sql = "sql",
+                             rosetta = ezql_rosetta(), names_column_sql = "sql",
                              type_function_column = "r_type"
 ) {
   # Resolve defaults
@@ -1257,7 +1290,7 @@ ezql_add_data <- function(df,
                           schema = NULL,
                           database = NULL,
                           address = NULL,
-                          rosetta = NULL,
+                          rosetta = ezql_rosetta(),
                           names_column_sql = "sql",
                           type_function_column = "r_type"
                           ) {
@@ -1379,7 +1412,7 @@ ezql_alter_data <- function(df,
                             schema = NULL,
                             database = NULL,
                             address = NULL,
-                            rosetta = NULL,
+                            rosetta = ezql_rosetta(),
                             names_column_sql = "sql",
                             type_function_column = "r_type"
                             ) {
@@ -1504,7 +1537,7 @@ ezql_delete_data <- function(df,
                              schema = NULL,
                              database = NULL,
                              address = NULL,
-                             rosetta = NULL,
+                             rosetta = ezql_rosetta(),
                              names_column_sql = "sql",
                              type_function_column = "r_type"
                              ) {
@@ -1663,7 +1696,7 @@ ezql_edit <- function(df,
                       database = NULL,
                       address = NULL,
                       delete_missing_rows = FALSE,
-                      rosetta = NULL,
+                      rosetta = ezql_rosetta(),
                       names_column_r = "r",
                       names_column_sql = "sql",
                       type_function_column = "r_type"
@@ -1901,27 +1934,37 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
 
 #' Apply a Targeted Data Fix and Log the Change
 #'
-#' This function performs a controlled update of a single record in a SQL table.
-#' It:
-#' - Retrieves the existing record from the server
+#' This function performs a controlled edit, deletion, or insertion of a single
+#' record in a SQL table, depending on whether \code{df}, \code{delete}, or
+#' \code{add} is supplied. It:
+#' - Retrieves the existing record from the server (for edits and deletions)
 #' - Logs the old and new values, supporting files, user identity, and update note locally
-#' - Applies the corrected record via \code{ezql_edit()}
+#' - Applies the change via \code{ezql_edit()} (edits and inserts) or a \code{DELETE} query
 #'
 #' Each fix is stored in its own timestamped subfolder under
 #' \code{file.path(ezql_log_path(), table)}, along with a central
 #' \code{fix_log.txt} that records the user, timestamp, key, and note for each change.
 #'
 #' @param df A one-row tibble containing the corrected data (R-side column names).
+#'   Used to edit an existing row. Mutually exclusive with \code{delete} and \code{add}.
 #' @param table The target SQL table name.
 #' @param update_note A text note describing the reason or context for the fix.
 #' @param user The name or identifier of the individual performing the fix.
 #'   Recorded in the central \code{fix_log.txt} for traceability.
+#' @param delete A one-row tibble containing only the primary key column(s) (R-side names)
+#'   of the row to delete. Mutually exclusive with \code{df} and \code{add}. The full row
+#'   is saved to \code{target_old.rds} before deletion for audit purposes.
 #' @param file_paths Optional character vector of file or folder paths to include in the log.
 #'   Defaults to \code{NULL}. Missing files trigger an error.
 #' @param rosetta A rosetta mapping tibble linking R and SQL column names.
 #'   Defaults to \code{ezql_rosetta()}.
 #' @param schema,database,address Optional SQL connection details;
 #'   defaults to values from \code{ezql_details_*()}.
+#' @param add A one-row tibble containing the data for a new row (R-side column names).
+#'   Mutually exclusive with \code{df} and \code{delete}. The primary key column(s) must be
+#'   supplied and must not already exist in the target table; the function errors otherwise.
+#'   Columns omitted from \code{add} are inserted as \code{NA} (subject to the table's own
+#'   defaults and constraints). Defaults to \code{NULL}.
 #'
 #' @details
 #' Primary key values are converted to character type using \code{gplyr::to_character()}
@@ -1930,28 +1973,40 @@ ezql_drop <- function(table, schema = NULL, database = NULL, address = NULL) {
 #'
 #' @return Invisibly returns the result of the \code{ezql_edit()} operation.
 #'
-#' @importFrom dplyr select all_of bind_rows slice_tail across everything filter
+#' @importFrom dplyr select all_of bind_rows slice_tail everything filter
 #' @importFrom tidyr fill unite
 #' @importFrom stringr str_c str_replace_all
 #' @importFrom readr write_lines write_rds
 #' @importFrom fs dir_create file_copy dir_copy is_file is_dir path file_exists path_file
 #' @importFrom lubridate now
-#' @importFrom purrr walk flatten_chr
+#' @importFrom purrr walk flatten_chr map
+#' @importFrom rlang expr
 #' @importFrom gplyr to_character
 #' @export
 ezql_fix <- function(
-    df,
+    df = NULL,
     table,
     update_note,
     user,
+    delete = NULL,
     file_paths = NULL,
     rosetta = ezql_rosetta(),
     schema = NULL,
     database = NULL,
-    address = NULL
+    address = NULL,
+    add = NULL
     #testing = TRUE
 ) {
   testing <- FALSE
+
+  # ---- 0. Validate exactly one of df / delete / add is supplied --------------
+  supplied <- c(df = !is.null(df), delete = !is.null(delete), add = !is.null(add))
+  if (sum(supplied) == 0)
+    stop("One of `df`, `delete`, or `add` must be provided.")
+  if (sum(supplied) > 1)
+    stop("Only one of `df`, `delete`, or `add` may be provided, not: ",
+         paste(names(supplied)[supplied], collapse = ", "), ".")
+
   # ---- 1. Validate supplied files / folders ----------------------------------
   if (!is.null(file_paths) && length(file_paths) > 0) {
     missing_paths <- file_paths[!fs::file_exists(file_paths)]
@@ -1999,41 +2054,84 @@ ezql_fix <- function(
     )
   }
 
-  # ---- 4. Validate df structure ----------------------------------------------
-  if (!all(pk_r %in% names(df))) {
-    stop(
-      "The primary key column(s) must be present in `df` using R-side names: ",
-      paste(pk_r, collapse = ", ")
-    )
+  # ---- 4. Validate df / delete structure -------------------------------------
+  if (!is.null(delete)) {
+
+    if (!all(pk_r %in% names(delete)))
+      stop(
+        "`delete` must contain the primary key column(s) using R-side names: ",
+        paste(pk_r, collapse = ", ")
+      )
+
+    extra_cols <- setdiff(names(delete), pk_r)
+    if (length(extra_cols) > 0)
+      stop(
+        "`delete` must contain only primary key column(s). Unexpected column(s): ",
+        paste(extra_cols, collapse = ", ")
+      )
+
+    if (nrow(delete) > 1) stop("`delete` can only contain one row.")
+    if (nrow(delete) == 0) stop("`delete` contains 0 rows.")
+
+    pk_source <- delete
+
+  } else if (!is.null(add)) {
+
+    if (!all(pk_r %in% names(add)))
+      stop(
+        "The primary key column(s) must be present in `add` using R-side names: ",
+        paste(pk_r, collapse = ", ")
+      )
+
+    if (nrow(add) > 1) stop("`add` can only contain one row.")
+    if (nrow(add) == 0) stop("`add` contains 0 rows.")
+
+    pk_source <- add
+
+  } else {
+
+    if (!all(pk_r %in% names(df)))
+      stop(
+        "The primary key column(s) must be present in `df` using R-side names: ",
+        paste(pk_r, collapse = ", ")
+      )
+
+    if (nrow(df) > 1) stop("This function can only take one row of data at a time.")
+    if (nrow(df) == 0) stop("The dataframe provided contains 0 rows.")
+
+    pk_source <- df
+
   }
 
-  if (nrow(df) > 1) stop("This function can only take one row of data at a time.")
-  if (nrow(df) == 0) stop("The dataframe provided contains 0 rows.")
-
   # ---- 5. Retrieve target_old (R-side columns via ezql_table) ----------------
-  target_old <- ezql_table(
+  full_tbl <- ezql_table(
     table   = table,
     schema  = schema,
     database = database,
     address  = address,
     use_rosetta = TRUE
-  ) %>%
+  )
+
+  target_old <- full_tbl %>%
     dplyr::filter(
-      dplyr::across(
-        dplyr::all_of(pk_r),
-        ~ .x == df[[dplyr::cur_column()]]
-      )
+      !!!purrr::map(pk_r, ~ rlang::expr(.data[[!!.x]] == !!pk_source[[.x]]))
     )
 
-  if (nrow(target_old) == 0) {
-    stop("No matching record found in target table for the given primary key.")
-  }
-  if (nrow(target_old) > 1) {
-    stop("Multiple rows found for this primary key; fix aborted.")
+  if (!is.null(add)) {
+    if (nrow(target_old) > 0) {
+      stop("A record with this primary key already exists; use `df` to edit it instead of `add`.")
+    }
+  } else {
+    if (nrow(target_old) == 0) {
+      stop("No matching record found in target table for the given primary key.")
+    }
+    if (nrow(target_old) > 1) {
+      stop("Multiple rows found for this primary key; fix aborted.")
+    }
   }
 
   # ---- 6. Build key string (collapsed PK values, R-side) ---------------------
-  key <- df %>%
+  key <- pk_source %>%
     dplyr::select(dplyr::all_of(pk_r)) %>%
     gplyr::to_character() %>%
     tidyr::unite(col = ".pk", dplyr::everything(), sep = "-", remove = FALSE) %>%
@@ -2072,48 +2170,127 @@ ezql_fix <- function(
     })
   }
 
-  # ---- 10. Save target_old and df (input) for audit --------------------------
+  # ---- 10. Save audit artifacts ----------------------------------------------
   readr::write_rds(target_old, fs::path(new_fix_folder, "target_old.rds"))
-  readr::write_rds(df,         fs::path(new_fix_folder, "target_new_input.rds"))
 
-  # ---- 11. Merge: fill new from old, keep final row --------------------------
-  invalid_cols <- setdiff(names(df), names(target_old))
-  if (length(invalid_cols) > 0) {
-    stop("`df` contains columns not found in the target table: ",
-         paste(invalid_cols, collapse = ", "))
-  }
+  if (!is.null(delete)) {
 
-  # Take the first (and only) row of target_old
-  target_new <- target_old
+    readr::write_rds(delete, fs::path(new_fix_folder, "delete_input.rds"))
 
-  # Overwrite with any values supplied in df, including NA
-  cols_to_patch <- names(df)
-  target_new[cols_to_patch] <- df[cols_to_patch]
+  } else if (!is.null(add)) {
 
-  # target_new <- dplyr::bind_rows(target_old, df) %>%
-  #   tidyr::fill(dplyr::everything(), .direction = "down") %>%
-  #   dplyr::slice_tail(n = 1)
+    readr::write_rds(add, fs::path(new_fix_folder, "add_input.rds"))
 
-  readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
-
-  # ---- 12. Push update via ezql_edit -----------------------------------------
-  if(!testing){
-    result <- ezql_edit(
-      df       = target_new,
-      table    = table,
-      schema   = schema,
-      database = database,
-      address  = address,
-      rosetta  = rosetta
-    )} else {
-      message("Testing mode: database not updated.")
-      result <- target_new
+    # ---- 11. Build new row from an NA template of the table structure --------
+    invalid_cols <- setdiff(names(add), names(full_tbl))
+    if (length(invalid_cols) > 0) {
+      stop("`add` contains columns not found in the target table: ",
+           paste(invalid_cols, collapse = ", "))
     }
 
-  # ---- 13. Append to table-level fix_log.txt (note only) ---------------------
+    # One all-NA row with the correct columns and types
+    target_new <- full_tbl[NA_integer_, ]
+
+    # Overwrite with any values supplied in add
+    cols_to_patch <- names(add)
+    target_new[cols_to_patch] <- add[cols_to_patch]
+
+    readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
+
+  } else {
+
+    readr::write_rds(df, fs::path(new_fix_folder, "target_new_input.rds"))
+
+    # ---- 11. Merge: fill new from old, keep final row ------------------------
+    invalid_cols <- setdiff(names(df), names(target_old))
+    if (length(invalid_cols) > 0) {
+      stop("`df` contains columns not found in the target table: ",
+           paste(invalid_cols, collapse = ", "))
+    }
+
+    # Take the first (and only) row of target_old
+    target_new <- target_old
+
+    # Overwrite with any values supplied in df, including NA
+    cols_to_patch <- names(df)
+    target_new[cols_to_patch] <- df[cols_to_patch]
+
+    # target_new <- dplyr::bind_rows(target_old, df) %>%
+    #   tidyr::fill(dplyr::everything(), .direction = "down") %>%
+    #   dplyr::slice_tail(n = 1)
+
+    readr::write_rds(target_new, fs::path(new_fix_folder, "target_new_final.rds"))
+
+  }
+
+  # ---- 12. Execute database operation ----------------------------------------
+  if (!testing) {
+
+    if (!is.null(delete)) {
+
+      pk_values <- pk_source %>% dplyr::pull(dplyr::all_of(pk_r[[1]]))
+      pk_sql_col <- pk_sql[[1]]
+
+      if (is.numeric(pk_values)) {
+        where_clause <- stringr::str_c(pk_sql_col, " = ", pk_values)
+      } else {
+        where_clause <- stringr::str_c(pk_sql_col, " = '", pk_values, "'")
+      }
+
+      if (length(pk_sql) > 1) {
+        extra_conditions <- purrr::map2_chr(pk_sql[-1], pk_r[-1], function(sql_col, r_col) {
+          val <- pk_source %>% dplyr::pull(dplyr::all_of(r_col))
+          if (is.numeric(val)) {
+            stringr::str_c(sql_col, " = ", val)
+          } else {
+            stringr::str_c(sql_col, " = '", val, "'")
+          }
+        })
+        where_clause <- stringr::str_c(c(where_clause, extra_conditions), collapse = " AND ")
+      }
+
+      delete_query <- stringr::str_c(
+        "DELETE FROM ", schema, ".", table, " WHERE ", where_clause
+      )
+
+      connection <- ezql_connect(database, address)
+      on.exit(RODBC::odbcClose(connection))
+      tryCatch(
+        {
+          res <- RODBC::sqlQuery(connection, delete_query)
+          if (!is.null(attr(res, "error")))
+            stop("Error executing query: ", attr(res, "error"))
+          message("Row successfully deleted from '", table, "'.")
+        },
+        error = function(e) stop("Failed to delete row: ", e$message)
+      )
+      result <- invisible(NULL)
+
+    } else {
+
+      result <- ezql_edit(
+        df       = target_new,
+        table    = table,
+        schema   = schema,
+        database = database,
+        address  = address,
+        rosetta  = rosetta
+      )
+
+    }
+
+  } else {
+    message("Testing mode: database not updated.")
+    result <- if (!is.null(delete)) invisible(NULL) else target_new
+  }
+
+  # ---- 13. Append to table-level fix_log.txt ---------------------------------
+  action <- if (!is.null(delete)) "delete" else if (!is.null(add)) "add" else "update"
+
   log_entry <- stringr::str_c(
     format(lubridate::now(), "%Y-%m-%d %H:%M:%S"),
     " | user: ", user,
+    " | action: ", action,
     " | key: ", key,
     " | note: ", update_note
   )
