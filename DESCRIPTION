@@ -1,11 +1,16 @@
 Package: ezekiel
 Type: Package
-Title: What the Package Does (Title Case)
+Title: A Friendly Toolkit for Working with SQL Server
 Version: 0.1.0
-Author: Who wrote it
-Maintainer: The package maintainer <yourself@somewhere.net>
-Description: More about what it does (maybe more than one line)
-    Use four spaces when indenting paragraphs within the Description.
+Authors@R:
+    person("Geordie", "McRuer", , "geo.mcruer@gmail.com", role = c("aut", "cre"))
+Description: Wraps 'RODBC' in consistent, pipe-friendly ezql_* functions so that SQL
+    Server work feels like working with data frames: stored connection details,
+    reading and writing tables, keeping a table in sync with a data frame,
+    managing columns through a central name and type mapping (the rosetta),
+    querying system-versioned (temporal) history as of any date, and making
+    audited corrections with ezql_fix(). Every database read and write in 'tina'
+    goes through it.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
